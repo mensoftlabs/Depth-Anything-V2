@@ -3,15 +3,20 @@ import numpy as np
 import torch
 import cv2
 from PIL import Image
+import plotly.express as px
+import plotly.graph_objects as go
 from matplotlib import cm
-import matplotlib.pyplot as plt
+import tempfile
+import datetime
+from fpdf import FPDF
+
 from depth_anything_v2.dpt import DepthAnythingV2
 
-# --- Page setup ---
+# --- Configuración de la página ---
 st.set_page_config(
-    page_title="Depth Anything V2",
+    page_title="Depth Anything V2 Professional",
     page_icon="🌊",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
@@ -28,7 +33,6 @@ def load_model(encoder="vitl"):
     model = DepthAnythingV2(**model_configs[encoder])
     model.load_state_dict(torch.load(f'checkpoints/depth_anything_v2_{encoder}.pth', map_location=device))
     model.to(device).eval()
-
     return model, device
 
 def infer_depth(model, device, image, input_size=518):
@@ -37,78 +41,117 @@ def infer_depth(model, device, image, input_size=518):
     depth = model.infer_image(image_rgb, input_size)
     return depth
 
-# --- UI Elements ---
-st.title("🌊 Depth Anything V2")
-st.markdown("A **minimalist** and professional tool to estimate depth from images or videos.")
+# --- Sidebar settings ---
+st.sidebar.header("Settings")
+encoder = st.sidebar.selectbox("Encoder Type", options=['vits', 'vitb', 'vitl', 'vitg'], index=2)
+input_size = st.sidebar.slider("Input Resolution", min_value=256, max_value=1024, value=518, step=14)
+threshold_range = st.sidebar.slider("Depth Threshold Filter", 0.0, 1.0, (0.0, 1.0), step=0.01)
 
-with st.sidebar:
-    st.header("Settings")
-    encoder = st.selectbox("Encoder Type", options=['vits', 'vitb', 'vitl', 'vitg'], index=2)
-    input_size = st.slider("Input Resolution", min_value=256, max_value=1024, value=518, step=14)
-
+# --- Load model ---
 model, device = load_model(encoder)
 
-uploaded_file = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
+# --- Upload images ---
+uploaded_files = st.file_uploader("Upload one or more images", type=["png", "jpg", "jpeg"], accept_multiple_files=True)
 
-if uploaded_file:
-    with st.spinner('Computing depth...'):
-        img = Image.open(uploaded_file).convert('RGB')
-        depth_map = infer_depth(model, device, img, input_size)
-        
-        # Organizar en pestañas
-        tab1, tab2 = st.tabs(["Visualization", "Depth Metrics"])
-        
-        with tab1:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("Original Image")
-                st.image(img, use_container_width=True)
-            with col2:
-                st.subheader("Depth Map")
-                depth_visual = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
-                depth_visual = cm.Spectral_r(depth_visual)[:, :, :3]
-                st.image(depth_visual, use_container_width=True)
+if uploaded_files:
+    tabs = st.tabs([f"Image {i+1}" for i in range(len(uploaded_files))])
+    
+    all_depth_maps = []
+    
+    for idx, (uploaded_file, tab) in enumerate(zip(uploaded_files, tabs)):
+        with tab:
+            img = Image.open(uploaded_file).convert("RGB")
+            with st.spinner(f"Processing image {uploaded_file.name}..."):
+                depth_map = infer_depth(model, device, img, input_size)
+                
+                # Normalize
+                depth_norm = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+                
+                # Threshold
+                depth_filtered = np.where(
+                    (depth_norm >= threshold_range[0]) & (depth_norm <= threshold_range[1]),
+                    depth_norm,
+                    0
+                )
+                
+                all_depth_maps.append(depth_norm)
+                
+                # Plotly interactive heatmap
+                fig = px.imshow(
+                    depth_filtered,
+                    color_continuous_scale="Spectral_r",
+                    origin="upper",
+                    labels={'color': 'Depth'},
+                )
+                fig.update_layout(
+                    title=f"Depth Map: {uploaded_file.name}",
+                    coloraxis_colorbar=dict(title="Normalized Depth"),
+                    dragmode="zoom"
+                )
+                fig.update_traces(hovertemplate="Depth: %{z:.3f}")
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.subheader("Original Image")
+                    st.image(img, use_container_width=True)
+                with col2:
+                    st.subheader("Threshold Filtered Depth")
+                    st.image((depth_filtered * 255).astype(np.uint8), use_container_width=True)
 
-            # Download button
-            depth_img = Image.fromarray((depth_visual * 255).astype(np.uint8))
-            depth_buffer = cv2.imencode('.png', np.array(depth_img))[1].tobytes()
-            st.download_button(
-                label="Download Depth Map", 
-                data=depth_buffer, 
-                file_name="depth_map.png", 
-                mime="image/png"
-            )
+                # Depth stats
+                st.subheader("Depth Metrics")
+                st.metric("Min", f"{depth_map.min():.4f}")
+                st.metric("Max", f"{depth_map.max():.4f}")
+                st.metric("Mean", f"{depth_map.mean():.4f}")
+                st.metric("Std", f"{depth_map.std():.4f}")
+                st.metric("Dynamic Range", f"{(depth_map.max()-depth_map.min()):.4f}")
+                
+                # Side-by-side comparisons
+                if len(uploaded_files) > 1:
+                    st.info("Use the other tabs to compare side-by-side.")
+                
+                # Resaltar áreas específicas
+                st.subheader("Highlight Areas")
+                highlight_threshold = st.slider(
+                    "Highlight values above", 0.0, 1.0, 0.8, step=0.01, key=f"highlight_{idx}"
+                )
+                highlight_mask = (depth_norm >= highlight_threshold).astype(np.uint8) * 255
+                st.image(highlight_mask, caption="Highlighted Areas", use_container_width=True)
+                
+    # --- Comparación entre modelos ---
+    if len(uploaded_files) > 1:
+        st.subheader("Side-by-Side Comparison")
+        compare_cols = st.columns(len(uploaded_files))
+        for i, col in enumerate(compare_cols):
+            col.image(uploaded_files[i], caption=f"Original {uploaded_files[i].name}", use_container_width=True)
+            col.image((all_depth_maps[i] * 255).astype(np.uint8), caption=f"Depth {uploaded_files[i].name}", use_container_width=True)
+    
+    # --- Export to PDF ---
+    if st.button("Generate PDF Report"):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", size=12)
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        pdf.cell(200, 10, txt=f"Depth Anything V2 Report - {timestamp}", ln=True, align="C")
         
-        with tab2:
-            st.subheader("Depth Statistics")
-            
-            # Calcular métricas
-            depth_min = depth_map.min()
-            depth_max = depth_map.max()
-            depth_mean = depth_map.mean()
-            depth_std = depth_map.std()
-            dynamic_range = depth_max - depth_min
-            
-            # Mostrar métricas en columnas
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Min Depth", f"{depth_min:.4f}")
-            col2.metric("Max Depth", f"{depth_max:.4f}")
-            col3.metric("Mean Depth", f"{depth_mean:.4f}")
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Std Deviation", f"{depth_std:.4f}")
-            col2.metric("Dynamic Range", f"{dynamic_range:.4f}")
-            col3.metric("Data Points", f"{depth_map.size:,}")
-            
-            # Histograma de distribución de profundidad
-            st.subheader("Depth Distribution")
-            fig, ax = plt.subplots()
-            ax.hist(depth_map.flatten(), bins=50, color='#1f77b4', alpha=0.7)
-            ax.set_xlabel('Depth Value')
-            ax.set_ylabel('Frequency')
-            ax.set_title('Depth Value Distribution')
-            ax.grid(True, linestyle='--', alpha=0.6)
-            st.pyplot(fig)
+        for idx, file in enumerate(uploaded_files):
+            pdf.ln(10)
+            pdf.cell(200, 10, txt=f"Image: {file.name}", ln=True)
+            tmp_img = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+            Image.fromarray((all_depth_maps[idx] * 255).astype(np.uint8)).save(tmp_img.name)
+            pdf.image(tmp_img.name, w=150)
+            pdf.ln(5)
+            pdf.cell(200, 10, txt=f"Min: {all_depth_maps[idx].min():.4f}", ln=True)
+            pdf.cell(200, 10, txt=f"Max: {all_depth_maps[idx].max():.4f}", ln=True)
+            pdf.cell(200, 10, txt=f"Mean: {all_depth_maps[idx].mean():.4f}", ln=True)
+            pdf.cell(200, 10, txt=f"Std: {all_depth_maps[idx].std():.4f}", ln=True)
+        
+        tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        pdf.output(tmp_pdf.name)
+        with open(tmp_pdf.name, "rb") as f:
+            st.download_button("Download PDF Report", f, file_name="depth_report.pdf", mime="application/pdf")
 
 else:
-    st.info('👆 Upload an image to begin.')
+    st.info("👆 Upload one or more images to begin.")

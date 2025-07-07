@@ -8,3 +8,5 @@ streamlit
 opencv-python-headless
 numpy
 Pillow
+fpdf
+plotly
