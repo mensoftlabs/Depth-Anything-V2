@@ -4,3 +4,7 @@ matplotlib
 opencv-python
 torch
 torchvision
+streamlit
+opencv-python-headless
+numpy
+Pillow
