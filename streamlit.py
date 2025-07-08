@@ -160,7 +160,7 @@ col1, col2 = st.columns([1, 4])
 with col1:
     # Generate a placeholder logo programmatically
     logo = r"C:\Users\alvar\Documents\GitHub\depth-images\logo.png"
-    st.image(logo, caption="DepthVision Pro", width=150)
+    st.image(logo, width=150)
 
 with col2:
     st.title("DepthVision Pro")
