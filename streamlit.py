@@ -7,11 +7,12 @@ from matplotlib import cm
 import matplotlib.pyplot as plt
 from depth_anything_v2.dpt import DepthAnythingV2
 import plotly.graph_objects as go
-from scipy import ndimage
 import pyvista as pv
 from stpyvista import stpyvista
 import io
-import time  # For progress simulation
+import time
+from scipy.ndimage import gaussian_filter
+from skimage import measure
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -68,103 +69,67 @@ def create_point_cloud(depth_map, image, scale=0.1, downsample_factor=4):
     
     return points, colors
 
-def create_obstacle_map(depth_map, threshold=0.3):
-    """Create obstacle map for navigation"""
-    # Normalize depth map
+def create_mesh(depth_map, image, scale=0.1, smoothing=1.0, decimation=0.8):
+    """Create a 3D mesh from depth map using marching cubes"""
+    # Normalize and scale depth
     normalized_depth = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+    depth_map = normalized_depth * scale
     
-    # Threshold to identify obstacles
-    obstacle_map = np.where(normalized_depth < threshold, 0, 1)
+    # Apply smoothing
+    if smoothing > 0:
+        depth_map = gaussian_filter(depth_map, sigma=smoothing)
     
-    # Apply morphological operations to clean up
-    obstacle_map = ndimage.binary_closing(obstacle_map)
-    obstacle_map = ndimage.binary_opening(obstacle_map)
+    # Create grid coordinates
+    height, width = depth_map.shape
+    x = np.linspace(0, 1, width)
+    y = np.linspace(0, 1, height)
+    X, Y = np.meshgrid(x, y)
     
-    return obstacle_map
+    # Create vertices and faces using marching cubes
+    verts, faces, normals, values = measure.marching_cubes(
+        depth_map, 
+        level=0.5 * scale, 
+        spacing=(1/width, 1/height, 1)
+    )
+    
+    # Create PyVista mesh
+    mesh = pv.PolyData(verts, faces.reshape(-1, 4)[:, 1:])
+    
+    # Map colors to mesh
+    points_2d = np.column_stack([
+        verts[:, 0] * (width - 1),
+        verts[:, 1] * (height - 1)
+    ]).astype(int)
+    
+    # Clip coordinates to image bounds
+    points_2d[:, 0] = np.clip(points_2d[:, 0], 0, width - 1)
+    points_2d[:, 1] = np.clip(points_2d[:, 1], 0, height - 1)
+    
+    # Get colors from image
+    colors = image[points_2d[:, 1], points_2d[:, 0]] / 255.0
+    mesh.point_data['colors'] = colors
+    
+    # Apply mesh decimation
+    if decimation < 1.0:
+        mesh = mesh.decimate(1.0 - decimation)
+    
+    return mesh
 
-def plan_navigation_path(obstacle_map, start, goal):
-    """Plan a navigation path using wavefront algorithm"""
-    # Create costmap (inverse of obstacle map)
-    costmap = np.where(obstacle_map == 1, 1, 1000)
-    
-    # Initialize wavefront propagation
-    distance_map = np.full_like(costmap, 1e6, dtype=float)
-    distance_map[goal] = 0
-    
-    # Create queue
-    queue = [goal]
-    
-    # 8-connectivity neighbors
-    neighbors = [(-1, -1), (-1, 0), (-1, 1),
-                 (0, -1),           (0, 1),
-                 (1, -1),  (1, 0),  (1, 1)]
-    
-    # Propagate wavefront
-    while queue:
-        x, y = queue.pop(0)
-        current_cost = distance_map[x, y]
-        
-        for dx, dy in neighbors:
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < obstacle_map.shape[0] and 0 <= ny < obstacle_map.shape[1]:
-                new_cost = current_cost + costmap[nx, ny] * np.sqrt(dx*dx + dy*dy)
-                if new_cost < distance_map[nx, ny]:
-                    distance_map[nx, ny] = new_cost
-                    queue.append((nx, ny))
-    
-    # Trace path from start to goal
-    path = [start]
-    current = start
-    
-    while current != goal:
-        x, y = current
-        min_cost = 1e6
-        next_pos = current
-        
-        for dx, dy in neighbors:
-            nx, ny = x + dx, y + dy
-            if 0 <= nx < obstacle_map.shape[0] and 0 <= ny < obstacle_map.shape[1]:
-                if distance_map[nx, ny] < min_cost:
-                    min_cost = distance_map[nx, ny]
-                    next_pos = (nx, ny)
-        
-        if next_pos == current:
-            break  # Stuck, can't reach goal
-        
-        current = next_pos
-        path.append(current)
-    
-    return path
-
-def create_ar_overlay(image, depth_map, alpha=0.5, colormap='viridis'):
-    """Create augmented reality overlay"""
-    # Normalize depth map
-    normalized_depth = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
-    
-    # Apply colormap
-    if colormap == 'viridis':
-        depth_colored = (cm.viridis(normalized_depth)[:, :, :3] * 255).astype(np.uint8)
-    elif colormap == 'plasma':
-        depth_colored = (cm.plasma(normalized_depth)[:, :, :3] * 255).astype(np.uint8)
-    else:  # jet
-        depth_colored = (cm.jet(normalized_depth)[:, :, :3] * 255).astype(np.uint8)
-    
-    # Blend with original image
-    blended = cv2.addWeighted(image, 1 - alpha, depth_colored, alpha, 0)
-    return blended
+def export_ply(mesh, filename):
+    """Export mesh to PLY format"""
+    mesh.save(filename, binary=True)
 
 # --- User Interface ---
 
 # --- Professional Header with Logo ---
 col1, col2 = st.columns([1, 4])
 with col1:
-    # Generate a placeholder logo programmatically
     logo = r"C:\Users\alvar\Documents\GitHub\depth-images\logo.png"
     st.image(logo, width=150)
 
 with col2:
     st.title("DepthVision Pro")
-    st.markdown("Advanced depth perception for 3D reconstruction, robotic navigation, and AR applications")
+    st.markdown("Advanced 3D reconstruction from single images")
 
 st.markdown("---") # Visual separator
 
@@ -177,16 +142,17 @@ with st.sidebar:
     st.markdown("---")
     st.header("🧊 3D Reconstruction")
     point_scale = st.slider("Depth Scale", 0.01, 1.0, 0.1, 0.01)
-    downsample_factor = st.slider("Downsample Factor", 1, 10, 4, 1)
+    downsample_factor = st.slider("Point Cloud Density", 1, 10, 4, 1,
+                                 help="Higher values reduce point count for better performance")
     
     st.markdown("---")
-    st.header("🤖 Navigation")
-    obstacle_threshold = st.slider("Obstacle Threshold", 0.1, 0.9, 0.3, 0.05)
-    
-    st.markdown("---")
-    st.header("🕶️ Augmented Reality")
-    ar_alpha = st.slider("Depth Overlay Opacity", 0.1, 0.9, 0.5, 0.1)
-    ar_colormap = st.selectbox("Depth Colormap", ['viridis', 'plasma', 'jet'], index=0)
+    st.header("🔧 Mesh Settings")
+    mesh_smoothing = st.slider("Mesh Smoothing", 0.0, 5.0, 1.5, 0.1,
+                              help="Reduces noise in the mesh surface")
+    mesh_decimation = st.slider("Mesh Simplification", 0.0, 1.0, 0.7, 0.05,
+                               help="Higher values create simpler meshes with fewer polygons")
+    mesh_quality = st.selectbox("Mesh Quality", ["Low", "Medium", "High"], index=1,
+                               help="Higher quality uses the original resolution but takes longer to process")
 
 model, device = load_model(encoder)
 
@@ -198,46 +164,75 @@ if uploaded_file:
     status_text = st.empty()
     status_text.text("Starting depth computation...")
     
+    # Create a container for all results
+    results_container = st.container()
+    
     try:
         # Load image (10%)
-        status_text.text("Loading image... (10%)")
+        status_text.text("Loading image...")
         progress_bar.progress(10)
         img = Image.open(uploaded_file).convert('RGB')
         img_np = np.array(img)
         
         # Preprocessing (20%)
-        status_text.text("Preprocessing image... (20%)")
+        status_text.text("Preparing image...")
         progress_bar.progress(20)
         
-        # Depth inference (simulated in stages)
-        status_text.text("Initializing model... (30%)")
-        progress_bar.progress(30)
-        
-        # Simulate model loading stages
-        for percent in range(40, 71, 10):
-            status_text.text(f"Running depth model... ({percent}%)")
-            progress_bar.progress(percent)
-            time.sleep(0.2)  # Simulate processing time
-            
-        # Actual depth computation
+        # Depth inference (40%)
+        status_text.text("Computing depth...")
+        progress_bar.progress(40)
         depth_map = infer_depth(model, device, img, input_size)
         
-        # Post-processing (80%)
-        status_text.text("Post-processing depth map... (80%)")
-        progress_bar.progress(80)
-        time.sleep(0.3)  # Simulate post-processing
+        # Create 3D data (70%)
+        status_text.text("Creating 3D models...")
+        progress_bar.progress(70)
+        
+        # Determine resolution for mesh based on quality setting
+        mesh_resolution = {
+            "Low": 4,
+            "Medium": 2,
+            "High": 1
+        }[mesh_quality]
+        
+        # Create downsampled version for mesh if needed
+        if mesh_resolution > 1:
+            depth_map_mesh = depth_map[::mesh_resolution, ::mesh_resolution]
+            img_mesh = img_np[::mesh_resolution, ::mesh_resolution]
+        else:
+            depth_map_mesh = depth_map
+            img_mesh = img_np
+            
+        # Create point cloud
+        points, colors = create_point_cloud(
+            depth_map, 
+            img_np,
+            scale=point_scale,
+            downsample_factor=downsample_factor
+        )
+        
+        # Create mesh
+        mesh = create_mesh(
+            depth_map_mesh, 
+            img_mesh,
+            scale=point_scale,
+            smoothing=mesh_smoothing,
+            decimation=mesh_decimation
+        )
         
         # Store results (90%)
-        status_text.text("Finalizing results... (90%)")
+        status_text.text("Finalizing results...")
         progress_bar.progress(90)
         st.session_state.img = img
         st.session_state.img_np = img_np
         st.session_state.depth_map = depth_map
+        st.session_state.points = points
+        st.session_state.colors = colors
+        st.session_state.mesh = mesh
         
         # Complete (100%)
-        status_text.text("Depth computation complete! (100%)")
+        status_text.text("Processing complete!")
         progress_bar.progress(100)
-        time.sleep(0.5)  # Let user see completion
+        time.sleep(0.3)
         
         # Clear progress indicators
         status_text.empty()
@@ -248,281 +243,200 @@ if uploaded_file:
         progress_bar.empty()
         st.stop()
     
-    # Tabs for organizing the output
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "👁️ Visualization", 
-        "📊 Depth Metrics", 
-        "🧊 3D Reconstruction", 
-        "🤖 Robotic Navigation", 
-        "🕶️ Augmented Reality"
-    ])
-    
-    with tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.subheader("Original Image")
-            st.image(img, use_container_width=True, caption="Input image")
-        with col2:
-            st.subheader("Depth Map")
-            depth_visual = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
-            depth_visual_cmap = cm.Spectral_r(depth_visual)[:, :, :3]
-            st.image(depth_visual_cmap, use_container_width=True, caption="Estimated depth")
-
-        # Download Button
-        depth_img_to_save = Image.fromarray((depth_visual_cmap * 255).astype(np.uint8))
-        depth_bgr = cv2.cvtColor(np.array(depth_img_to_save), cv2.COLOR_RGB2BGR)
-        _, depth_buffer = cv2.imencode('.png', depth_bgr)
-        
-        st.download_button(
-            label="📥 Download Depth Map",
-            data=depth_buffer.tobytes(),
-            file_name="depth_map.png",
-            mime="image/png"
-        )
-    
-    with tab2:
-        st.subheader("Depth Statistics")
-        
-        # Metric calculations
-        depth_min, depth_max = depth_map.min(), depth_map.max()
-        depth_mean, depth_std = depth_map.mean(), depth_map.std()
-        
-        # Metric presentation
-        metrics_cols = st.columns(4)
-        metrics_cols[0].metric("Minimum", f"{depth_min:.4f}")
-        metrics_cols[1].metric("Maximum", f"{depth_max:.4f}")
-        metrics_cols[2].metric("Mean", f"{depth_mean:.4f}")
-        metrics_cols[3].metric("Std Deviation", f"{depth_std:.4f}")
-        
-        # Depth distribution histogram
-        st.subheader("Depth Distribution")
-        fig, ax = plt.subplots()
-        ax.hist(depth_map.flatten(), bins=50, color='#0d3b66', alpha=0.8)
-        ax.set_xlabel('Depth Value')
-        ax.set_ylabel('Frequency')
-        ax.set_title('Histogram of Depth Values')
-        ax.grid(True, linestyle='--', alpha=0.5)
-        st.pyplot(fig)
-        
-        # Depth surface plot
-        st.subheader("Depth Surface")
-        fig = plt.figure(figsize=(10, 6))
-        ax = fig.add_subplot(111, projection='3d')
-        
-        # Downsample for performance
-        downsample = 4
-        y = np.arange(0, depth_map.shape[0], downsample)
-        x = np.arange(0, depth_map.shape[1], downsample)
-        X, Y = np.meshgrid(x, y)
-        Z = depth_map[::downsample, ::downsample]
-        
-        # Create surface plot
-        surf = ax.plot_surface(X, Y, Z, cmap='viridis', 
-                              linewidth=0, antialiased=True, 
-                              rstride=2, cstride=2, alpha=0.8)
-        
-        ax.set_zlim(depth_map.min(), depth_map.max())
-        fig.colorbar(surf, shrink=0.5, aspect=5)
-        ax.set_title('Depth Surface Visualization')
-        st.pyplot(fig)
-    
-    with tab3:
-        st.subheader("3D Point Cloud")
-        
-        # Create point cloud
-        points, colors = create_point_cloud(
-            st.session_state.depth_map, 
-            st.session_state.img_np,
-            scale=point_scale,
-            downsample_factor=downsample_factor
-        )
-        
-        # Create Plotly figure
-        fig = go.Figure(data=[go.Scatter3d(
-            x=points[:, 0],
-            y=points[:, 1],
-            z=points[:, 2],
-            mode='markers',
-            marker=dict(
-                size=2,
-                color=colors,
-                opacity=0.8
-            )
-        )])
-        
-        fig.update_layout(
-            scene=dict(
-                xaxis_title='X',
-                yaxis_title='Y',
-                zaxis_title='Depth',
-                aspectmode='data'
-            ),
-            height=600,
-            margin=dict(l=0, r=0, b=0, t=0)
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Mesh reconstruction
-        st.subheader("Mesh Reconstruction")
-        
-        # Create a simple mesh using depth map
-        height, width = st.session_state.depth_map.shape
-        y = np.linspace(0, 1, height)
-        x = np.linspace(0, 1, width)
-        X, Y = np.meshgrid(x, y)
-        Z = st.session_state.depth_map
-        
-        # Create PyVista surface
-        grid = pv.StructuredGrid(X, Y, Z)
-        surface = grid.extract_surface()
-        
-        # Create plotter
-        plotter = pv.Plotter(window_size=[600, 400])
-        plotter.add_mesh(surface, scalars=Z.ravel(), cmap='viridis')
-        plotter.view_isometric()
-        
-        # Display in Streamlit
-        stpyvista(plotter, key="mesh_viewer")
-        
-        st.info("💡 Rotate the mesh using your mouse for different viewpoints")
-    
-    with tab4:
-        st.subheader("Robotic Navigation Planning")
-        
-        # Create obstacle map
-        obstacle_map = create_obstacle_map(
-            st.session_state.depth_map,
-            threshold=obstacle_threshold
-        )
-        
-        # Display obstacle map
-        col1, col2 = st.columns(2)
-        with col1:
-            st.image(obstacle_map, caption="Obstacle Map (White = Navigable)", use_container_width=True)
-        
-        # Navigation path planning
-        st.subheader("Path Planning")
-        
-        # Get image dimensions
-        height, width = obstacle_map.shape
-        
-        # Set default start and goal
-        start = (height//2, 20)
-        goal = (height//2, width-20)
-        
-        # Plan path
-        path = plan_navigation_path(obstacle_map, start, goal)
-        
-        # Visualize path on obstacle map
-        path_map = np.zeros((height, width, 3), dtype=np.uint8)
-        path_map[obstacle_map == 1] = (200, 200, 200)  # Free space
-        path_map[obstacle_map == 0] = (100, 100, 100)  # Obstacles
-        
-        # Draw path
-        for i, (x, y) in enumerate(path):
-            color = (0, 255, 0) if i == 0 else (255, 0, 0) if i == len(path)-1 else (0, 0, 255)
-            cv2.circle(path_map, (y, x), 3, color, -1)
-            if i > 0:
-                prev_x, prev_y = path[i-1]
-                cv2.line(path_map, (prev_y, prev_x), (y, x), (0, 0, 255), 2)
-        
-        with col2:
-            st.image(path_map, caption="Navigation Path (Green=Start, Red=Goal)", use_container_width=True)
-        
-        # Navigation metrics
-        st.subheader("Navigation Metrics")
-        path_length = len(path)
-        avg_depth = np.mean([st.session_state.depth_map[x, y] for (x, y) in path])
-        
-        col1, col2 = st.columns(2)
-        col1.metric("Path Length", f"{path_length} steps")
-        col2.metric("Average Depth", f"{avg_depth:.4f}")
-        
-        st.info("💡 Adjust obstacle threshold in the sidebar to change navigation behavior")
-    
-    with tab5:
-        st.subheader("Augmented Reality View")
-        
-        # Create AR overlay
-        ar_overlay = create_ar_overlay(
-            st.session_state.img_np,
-            st.session_state.depth_map,
-            alpha=ar_alpha,
-            colormap=ar_colormap
-        )
-        
-        # Display AR overlay
-        st.image(ar_overlay, use_container_width=True, 
-                caption=f"AR Overlay (Opacity: {ar_alpha}, Colormap: {ar_colormap})")
-        
-        # Comparison slider
-        st.subheader("Comparison View")
-        compare = st.slider("Original vs AR", 0.0, 1.0, 0.5, 0.01,
-                           help="Slide to compare original image and AR overlay")
-        
-        # Create comparison image
-        compare_img = np.hstack([
-            st.session_state.img_np,
-            ar_overlay
+    # Display all results in the container
+    with results_container:
+        # Tabs for organizing the output
+        tab1, tab2, tab3 = st.tabs([
+            "👁️ Visualization", 
+            "📊 Depth Analysis", 
+            "🧊 3D Reconstruction"
         ])
         
-        # Draw divider
-        h, w, _ = compare_img.shape
-        cv2.line(compare_img, (w//2, 0), (w//2, h), (255, 255, 255), 2)
+        with tab1:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Original Image")
+                st.image(img, use_container_width=True, caption="Input image")
+            with col2:
+                st.subheader("Depth Map")
+                depth_visual = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
+                depth_visual_cmap = cm.viridis(depth_visual)[:, :, :3]
+                st.image(depth_visual_cmap, use_container_width=True, caption="Estimated depth")
+
+            # Download Button
+            depth_img_to_save = Image.fromarray((depth_visual_cmap * 255).astype(np.uint8))
+            depth_bgr = cv2.cvtColor(np.array(depth_img_to_save), cv2.COLOR_RGB2BGR)
+            _, depth_buffer = cv2.imencode('.png', depth_bgr)
+            
+            st.download_button(
+                label="📥 Download Depth Map",
+                data=depth_buffer.tobytes(),
+                file_name="depth_map.png",
+                mime="image/png"
+            )
         
-        # Position indicator
-        indicator_pos = int(compare * w)
-        cv2.line(compare_img, (indicator_pos, 0), (indicator_pos, h), (0, 255, 0), 3)
+        with tab2:
+            st.subheader("Depth Statistics")
+            
+            # Metric calculations
+            depth_min, depth_max = depth_map.min(), depth_map.max()
+            depth_mean, depth_std = depth_map.mean(), depth_map.std()
+            
+            # Metric presentation
+            metrics_cols = st.columns(4)
+            metrics_cols[0].metric("Minimum", f"{depth_min:.4f}")
+            metrics_cols[1].metric("Maximum", f"{depth_max:.4f}")
+            metrics_cols[2].metric("Mean", f"{depth_mean:.4f}")
+            metrics_cols[3].metric("Std Deviation", f"{depth_std:.4f}")
+            
+            # Depth distribution histogram
+            st.subheader("Depth Distribution")
+            fig, ax = plt.subplots()
+            ax.hist(depth_map.flatten(), bins=50, color='#0d3b66', alpha=0.8)
+            ax.set_xlabel('Depth Value')
+            ax.set_ylabel('Frequency')
+            ax.set_title('Histogram of Depth Values')
+            ax.grid(True, linestyle='--', alpha=0.5)
+            st.pyplot(fig)
+            
+            # Depth surface plot
+            st.subheader("Depth Surface")
+            fig = plt.figure(figsize=(10, 6))
+            ax = fig.add_subplot(111, projection='3d')
+            
+            # Downsample for performance
+            downsample = 4
+            y = np.arange(0, depth_map.shape[0], downsample)
+            x = np.arange(0, depth_map.shape[1], downsample)
+            X, Y = np.meshgrid(x, y)
+            Z = depth_map[::downsample, ::downsample]
+            
+            # Create surface plot
+            surf = ax.plot_surface(X, Y, Z, cmap='viridis', 
+                                  linewidth=0, antialiased=True, 
+                                  rstride=2, cstride=2, alpha=0.8)
+            
+            ax.set_zlim(depth_map.min(), depth_map.max())
+            fig.colorbar(surf, shrink=0.5, aspect=5)
+            ax.set_title('Depth Surface Visualization')
+            st.pyplot(fig)
         
-        st.image(compare_img, caption="Left: Original | Right: AR Overlay", use_container_width=True)
-        
-        # Download AR image
-        ar_img = Image.fromarray(ar_overlay)
-        img_byte_arr = io.BytesIO()
-        ar_img.save(img_byte_arr, format='PNG')
-        
-        st.download_button(
-            label="📥 Download AR Image",
-            data=img_byte_arr.getvalue(),
-            file_name="ar_overlay.png",
-            mime="image/png"
-        )
+        with tab3:
+            st.subheader("3D Point Cloud")
+            
+            # Create Plotly figure
+            fig = go.Figure(data=[go.Scatter3d(
+                x=st.session_state.points[:, 0],
+                y=st.session_state.points[:, 1],
+                z=st.session_state.points[:, 2],
+                mode='markers',
+                marker=dict(
+                    size=2,
+                    color=st.session_state.colors,
+                    opacity=0.8
+                )
+            )])
+            
+            fig.update_layout(
+                scene=dict(
+                    xaxis_title='X',
+                    yaxis_title='Y',
+                    zaxis_title='Depth',
+                    aspectmode='data'
+                ),
+                height=600,
+                margin=dict(l=0, r=0, b=0, t=0)
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Mesh reconstruction
+            st.subheader("Mesh Reconstruction")
+            
+            # Create plotter
+            plotter = pv.Plotter(window_size=[800, 500])
+            plotter.add_mesh(
+                st.session_state.mesh, 
+                scalars='colors',
+                rgb=True,
+                smooth_shading=True
+            )
+            plotter.view_isometric()
+            
+            # Display in Streamlit
+            stpyvista(plotter, key="mesh_viewer")
+            
+            st.info("💡 Rotate the mesh using your mouse for different viewpoints")
+            
+            # Mesh download options
+            st.subheader("Export 3D Model")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Export as PLY
+                ply_buffer = io.BytesIO()
+                st.session_state.mesh.save(ply_buffer, binary=True)
+                st.download_button(
+                    label="📥 Download PLY Model",
+                    data=ply_buffer.getvalue(),
+                    file_name="3d_model.ply",
+                    mime="application/octet-stream"
+                )
+            
+            with col2:
+                # Export as OBJ
+                obj_buffer = io.StringIO()
+                st.session_state.mesh.save(obj_buffer, fmt='obj')
+                st.download_button(
+                    label="📥 Download OBJ Model",
+                    data=obj_buffer.getvalue(),
+                    file_name="3d_model.obj",
+                    mime="text/plain"
+                )
+            
+            # Display mesh statistics
+            st.subheader("Mesh Statistics")
+            mesh_stats = st.session_state.mesh
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Vertices", f"{mesh_stats.n_points:,}")
+            col2.metric("Faces", f"{mesh_stats.n_faces:,}")
+            col3.metric("Size", f"{len(ply_buffer.getvalue()) / 1024:.1f} KB")
 
 else:
     # --- Initial App Description and Examples ---
-    st.info('👆 Upload an image to begin the depth analysis.')
+    st.info('👆 Upload an image to begin 3D reconstruction.')
     
     st.markdown("""
         ### Welcome to DepthVision Pro!
         
-        This advanced application leverages the power of the **Depth Anything V2** model to generate high-quality depth maps and enable:
+        This advanced application leverages the power of the **Depth Anything V2** model to create high-quality 3D models from single images.
         
-        - **3D Reconstruction**: Convert 2D images into interactive 3D point clouds and surfaces
-        - **Robotic Navigation**: Plan obstacle-avoiding paths for autonomous systems
-        - **Augmented Reality**: Create depth-aware overlays for immersive experiences
+        **Key Features:**
+        - **Photorealistic 3D Reconstruction**: Convert 2D images into detailed 3D models
+        - **Interactive Visualization**: Explore your models from any angle
+        - **Professional Export**: Download models in PLY and OBJ formats for use in other applications
         
         **How it works:**
         1.  **Upload an image** using the file uploader above
         2.  Adjust the **model settings** in the sidebar
-        3.  Explore different features using the **tabs**
-        4.  Download results or share insights
+        3.  Explore the **3D Reconstruction** tab
+        4.  Download your 3D model for further use
         
-        ### Key Features
+        ### Advanced 3D Reconstruction Technology
         
-        <div style="background-color:#f0f2f6;padding:20px;border-radius:10px">
+        <div style="background-color:#f0f2f6;padding:20px;border-radius:10px;margin-top:20px">
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
             <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1)">
-                <h3>🧊 3D Reconstruction</h3>
-                <p>Transform 2D images into interactive 3D models with adjustable depth scaling</p>
+                <h3>🎯 Precision Depth Mapping</h3>
+                <p>Advanced algorithms extract accurate depth information from single images</p>
             </div>
             <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1)">
-                <h3>🤖 Robotic Navigation</h3>
-                <p>Plan obstacle-avoiding paths with adjustable obstacle detection threshold</p>
+                <h3>🔍 Detail Preservation</h3>
+                <p>Optimized mesh generation preserves fine details while reducing noise</p>
             </div>
             <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1)">
-                <h3>🕶️ Augmented Reality</h3>
-                <p>Create depth-aware overlays with adjustable transparency and color schemes</p>
+                <h3>⚡ Performance Optimized</h3>
+                <p>Smart processing handles complex scenes efficiently</p>
             </div>
         </div>
         </div>
