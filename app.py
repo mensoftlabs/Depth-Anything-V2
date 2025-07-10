@@ -1,88 +1,92 @@
-import glob
-import gradio as gr
-import matplotlib
-import numpy as np
+import streamlit as st
 from PIL import Image
-import torch
-import tempfile
-from gradio_imageslider import ImageSlider
+import numpy as np
+from streamlit_app.ui_components import inject_custom_css
 
-from depth_anything_v2.dpt import DepthAnythingV2
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="DepthVision Pro | Home",
+    layout="wide",
+    page_icon="static/logo.png",
+    initial_sidebar_state="expanded"
+)
+inject_custom_css()
 
-css = """
-#img-display-container {
-    max-height: 100vh;
-}
-#img-display-input {
-    max-height: 80vh;
-}
-#img-display-output {
-    max-height: 80vh;
-}
-#download {
-    height: 62px;
-}
-"""
-DEVICE = 'cuda' if torch.cuda.is_available() else 'mps' if torch.backends.mps.is_available() else 'cpu'
-model_configs = {
-    'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-    'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-    'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
-    'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
-}
-encoder = 'vitl'
-model = DepthAnythingV2(**model_configs[encoder])
-state_dict = torch.load(f'checkpoints/depth_anything_v2_{encoder}.pth', map_location="cpu")
-model.load_state_dict(state_dict)
-model = model.to(DEVICE).eval()
+# --- Main Content ---
+st.markdown("""
+    <style>
+        .hero {
+            background: linear-gradient(135deg, #5C6B7F 0%, #7DD3FC 100%);
+            border-radius: 1rem;
+            padding: 3rem;
+            color: white;
+            margin-bottom: 2rem;
+        }
+        .feature-card {
+            transition: transform 0.2s;
+        }
+        .feature-card:hover {
+            transform: translateY(-5px);
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-title = "# Depth Anything V2"
-description = """Official demo for **Depth Anything V2**.
-Please refer to our [paper](https://arxiv.org/abs/2406.09414), [project page](https://depth-anything-v2.github.io), or [github](https://github.com/DepthAnything/Depth-Anything-V2) for more details."""
+# Hero Section
+with st.container():
+    st.markdown("""
+        <div class="hero">
+            <h1 style="color: white; margin-bottom: 0.5rem;">DepthVision Pro</h1>
+            <p style="font-size: 1.2rem; opacity: 0.9;">
+                Advanced monocular depth estimation and 3D reconstruction
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
 
-def predict_depth(image):
-    return model.infer_image(image)
+# Features Grid
+col1, col2, col3 = st.columns(3)
+with col1:
+    with st.container():
+        st.markdown('<div class="card feature-card">', unsafe_allow_html=True)
+        st.markdown("### Depth Estimation")
+        st.markdown("""
+            <p style="color: #64748b;">
+                State-of-the-art monocular depth estimation using transformer-based models.
+            </p>
+        """, unsafe_allow_html=True)
+        if st.button("Get Started →", key="depth_btn"):
+            st.switch_page("pages/depth_app.py")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-with gr.Blocks(css=css) as demo:
-    gr.Markdown(title)
-    gr.Markdown(description)
-    gr.Markdown("### Depth Prediction demo")
+with col2:
+    with st.container():
+        st.markdown('<div class="card feature-card">', unsafe_allow_html=True)
+        st.markdown("### 3D Reconstruction")
+        st.markdown("""
+            <p style="color: #64748b;">
+                Convert 2D images into detailed 3D models with texture mapping.
+            </p>
+        """, unsafe_allow_html=True)
+        if st.button("Explore 3D →", key="3d_btn"):
+            st.switch_page("pages/3d_app.py")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    with gr.Row():
-        input_image = gr.Image(label="Input Image", type='numpy', elem_id='img-display-input')
-        depth_image_slider = ImageSlider(label="Depth Map with Slider View", elem_id='img-display-output', position=0.5)
-    submit = gr.Button(value="Compute Depth")
-    gray_depth_file = gr.File(label="Grayscale depth map", elem_id="download",)
-    raw_file = gr.File(label="16-bit raw output (can be considered as disparity)", elem_id="download",)
+with col3:
+    with st.container():
+        st.markdown('<div class="card feature-card">', unsafe_allow_html=True)
+        st.markdown("### Point Cloud")
+        st.markdown("""
+            <p style="color: #64748b;">
+                Generate and visualize high-density point clouds from single images.
+            </p>
+        """, unsafe_allow_html=True)
+        if st.button("View Demo →", key="cloud_btn"):
+            st.switch_page("pages/3d_app.py")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    cmap = matplotlib.colormaps.get_cmap('Spectral_r')
-
-    def on_submit(image):
-        original_image = image.copy()
-
-        h, w = image.shape[:2]
-
-        depth = predict_depth(image[:, :, ::-1])
-
-        raw_depth = Image.fromarray(depth.astype('uint16'))
-        tmp_raw_depth = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        raw_depth.save(tmp_raw_depth.name)
-
-        depth = (depth - depth.min()) / (depth.max() - depth.min()) * 255.0
-        depth = depth.astype(np.uint8)
-        colored_depth = (cmap(depth)[:, :, :3] * 255).astype(np.uint8)
-
-        gray_depth = Image.fromarray(depth)
-        tmp_gray_depth = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        gray_depth.save(tmp_gray_depth.name)
-
-        return [(original_image, colored_depth), tmp_gray_depth.name, tmp_raw_depth.name]
-
-    submit.click(on_submit, inputs=[input_image], outputs=[depth_image_slider, gray_depth_file, raw_file])
-
-    example_files = glob.glob('assets/examples/*')
-    examples = gr.Examples(examples=example_files, inputs=[input_image], outputs=[depth_image_slider, gray_depth_file, raw_file], fn=on_submit)
-
-
-if __name__ == '__main__':
-    demo.queue().launch()
+# Footer
+st.markdown("""
+    <div style="text-align: center; margin-top: 3rem; color: #64748b; font-size: 0.9rem;">
+        <hr style="border-top: 1px solid #E2E8F0; margin-bottom: 1rem;">
+        DepthVision Pro v1.0 | © 2023
+    </div>
+""", unsafe_allow_html=True)

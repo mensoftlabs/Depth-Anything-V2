@@ -16,3 +16,7 @@ scikit-image
 fpdf2
 pyvista
 stpyvista
+scipy
+streamlit-elements
+scikit-learn
+open3d
