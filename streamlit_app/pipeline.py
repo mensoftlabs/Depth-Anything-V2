@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-import streamlit as st
+import streamlit_depth_client as st
 import torch
 
 from .config import DEVICE

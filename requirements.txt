@@ -1,5 +1,5 @@
 gradio_imageslider
-gradio==4.29.0
+gradio
 matplotlib
 opencv-python
 torch
@@ -16,3 +16,5 @@ scikit-image
 fpdf2
 pyvista
 stpyvista
+streamlit-echarts
+requests
