@@ -1,79 +1,191 @@
-import threading, cv2, numpy as np, os, time, pandas as pd
+import os
+import time
+import threading
+import cv2
+import numpy as np
+import pandas as pd
+import torch
+import sqlite3
 from depth_anything_v2.dpt import DepthAnythingV2
-import torch 
+from contextlib import contextmanager
+
 class DepthStore:
-    def __init__(self, encoder="vitl", min_size=518):
+    def __init__(self, encoder="vitl", min_size=518, bins=50):
         self._lock = threading.Lock()
-        self._frame = None
+        self._frame_raw = self._frame_depth = None
+        self._last_update = 0
         self.recording = False
         self.raw_path = self.proc_path = None
         self.frame_count = 0
-        self.stats = []          # lista de (t, min, max, mean, std)
+        self.hist_bins = bins
+        self.hist_edges = np.linspace(0, 1, bins + 1)
+        self.hist_counts = np.zeros(bins, dtype=np.int64)
         self.encoder, self.min_size = encoder, min_size
-
         self.model, self.device = self._load_model()
+        self._init_db()
+
+    def _init_db(self):
+        self.db_conn = sqlite3.connect(':memory:', check_same_thread=False)
+        self.db_conn.execute("""
+            CREATE TABLE IF NOT EXISTS depth_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp REAL,
+                min REAL,
+                max REAL,
+                mean REAL,
+                std REAL,
+                frame_count INTEGER
+            )
+        """)
+        self.db_conn.commit()
+
+    @contextmanager
+    def _db_cursor(self):
+        cursor = self.db_conn.cursor()
+        try:
+            yield cursor
+            self.db_conn.commit()
+        finally:
+            cursor.close()
 
     def _load_model(self):
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        cfg = {"encoder": self.encoder, "features": 256, "out_channels":[256,512,1024,1024]}
-        model = DepthAnythingV2(**cfg)
-        model.load_state_dict(torch.load(f"checkpoints/depth_anything_v2_{self.encoder}.pth", map_location=device))
-        model.to(device).eval()
-        return model, device
+        cfg = {
+            "encoder": self.encoder,
+            "features": 256,
+            "out_channels": [256, 512, 1024, 1024]
+        }
+        m = DepthAnythingV2(**cfg)
+        m.load_state_dict(torch.load(
+            f"checkpoints/depth_anything_v2_{self.encoder}.pth",
+            map_location=device))
+        m.to(device).eval()
+        return m, device
 
-    def _depth_inference(self, frame):
-        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        depth = self.model.infer_image(bgr, self.min_size)
-        return depth
+    def _depth_inference(self, rgb):
+        return self.model.infer_image(
+            cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+            self.min_size
+        )
 
-    def _process_and_store(self, frame):
-        if not self.recording: return
-        t = time.time()
+    def _process_frame(self, frame_bgr):
+        # Convert to RGB for processing
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        
+        # Depth processing
+        with torch.no_grad():
+            depth = self._depth_inference(frame_rgb)
+        
+        dmin, dmax = float(depth.min()), float(depth.max())
+        norm = ((depth - dmin) / (dmax - dmin + 1e-6)).clip(0, 1)
+        vis = cv2.applyColorMap((norm * 255).astype("uint8"), cv2.COLORMAP_MAGMA)
+        
+        # Histogram
+        idx, _ = np.histogram(norm.flatten(), self.hist_edges)
+        
+        # Stats
+        stats = (time.time(), dmin, dmax, float(depth.mean()), float(depth.std()))
+        
+        return frame_rgb, vis, stats, idx
 
-        # ----- profundidad -----
-        depth = self._depth_inference(frame)
-        dmin, dmax = depth.min(), depth.max()
-        dmean, dstd = depth.mean(), depth.std()
-        self.stats.append((t, dmin, dmax, dmean, dstd))
+    def set_frame(self, img_bytes: bytes):
+        try:
+            frame_bgr = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+            if frame_bgr is None:
+                raise ValueError("Empty frame")
+            
+            # Process frame
+            frame_rgb, vis, stats, hist_idx = self._process_frame(frame_bgr)
+            
+            # Update state
+            with self._lock:
+                # Encode raw frame
+                _, enc_raw = cv2.imencode(".jpg", frame_bgr)
+                self._frame_raw = enc_raw.tobytes()
+                
+                # Encode depth frame
+                _, enc_depth = cv2.imencode(".jpg", vis)
+                self._frame_depth = enc_depth.tobytes()
+                
+                # Update histogram
+                self.hist_counts += hist_idx
+                self._last_update = time.time()
+                
+                if self.recording:
+                    # Save to database
+                    with self._db_cursor() as cur:
+                        cur.execute(
+                            "INSERT INTO depth_metrics (timestamp, min, max, mean, std, frame_count) VALUES (?, ?, ?, ?, ?, ?)",
+                            (*stats, self.frame_count)
+                        )
+                    
+                    # Save images
+                    cv2.imwrite(
+                        os.path.join(self.raw_path, f"frame_{self.frame_count:06d}.jpg"),
+                        frame_bgr
+                    )
+                    cv2.imwrite(
+                        os.path.join(self.proc_path, f"depth_{self.frame_count:06d}.png"),
+                        (norm * 255).astype("uint8")
+                    )
+                    self.frame_count += 1
+                    
+        except Exception as e:
+            print(f"Error processing frame: {e}")
 
-        # ----- guardar -----
-        raw_name  = os.path.join(self.raw_path,  f"frame_{self.frame_count:06d}.jpg")
-        proc_name = os.path.join(self.proc_path, f"depth_{self.frame_count:06d}.png")
-        cv2.imwrite(raw_name, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-        depth_vis = (255*(depth - dmin)/(dmax-dmin)).astype(np.uint8)
-        cv2.imwrite(proc_name, depth_vis)
-
-        # frame codificado para el stream
-        cmap = cv2.applyColorMap(depth_vis, cv2.COLORMAP_MAGMA)
+    def get_frame_raw(self):
         with self._lock:
-            _, enc = cv2.imencode(".jpg", cmap)
-            self._frame = enc.tobytes()
-            self.frame_count += 1
+            return self._frame_raw if (time.time() - self._last_update) < 5 else None
 
-    # -------- interfaz pública ----------
-    def set_frame(self, bytes_):
-        npimg = np.frombuffer(bytes_, np.uint8)
-        frame = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        if frame is None: raise ValueError("Bad frame")
-        self._process_and_store(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    def get_frame_depth(self):
+        with self._lock:
+            return self._frame_depth if (time.time() - self._last_update) < 5 else None
+
+    def last_stats(self):
+        with self._db_cursor() as cur:
+            row = cur.execute(
+                "SELECT min, max, mean, std FROM depth_metrics ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            return row if row else (0, 0, 0, 0)
+
+    def stats_timeseries(self):
+        with self._db_cursor() as cur:
+            return cur.execute(
+                "SELECT timestamp, min, max, mean, std FROM depth_metrics ORDER BY timestamp"
+            ).fetchall()
+
+    def hist(self):
+        with self._lock:
+            return self.hist_edges.tolist(), self.hist_counts.tolist()
 
     def start(self):
         ts = time.strftime("%Y%m%d_%H%M%S")
-        self.raw_path = os.path.join("data/raw", ts);      os.makedirs(self.raw_path, exist_ok=True)
-        self.proc_path= os.path.join("data/depth", ts);    os.makedirs(self.proc_path, exist_ok=True)
+        self.raw_path = os.path.join("data/raw", ts)
+        self.proc_path = os.path.join("data/depth", ts)
+        os.makedirs(self.raw_path, exist_ok=True)
+        os.makedirs(self.proc_path, exist_ok=True)
+        
         with self._lock:
-            self.recording = True; self.frame_count = 0; self.stats.clear()
+            self.recording = True
+            self.frame_count = 0
+            self.hist_counts[:] = 0
 
     def stop(self):
-        with self._lock: self.recording = False
+        with self._lock:
+            self.recording = False
 
-    def is_recording(self):    return self.recording
-    def get_frame(self):       return self._frame
-    def last_stats(self):      return self.stats[-1][1:] if self.stats else (0,0,0,0)
-    def stats_timeseries(self):return list(self.stats)
+    def is_recording(self):
+        with self._lock:
+            return self.recording
+
     def stats_to_csv(self):
-        df = pd.DataFrame(self.stats, columns=["time","min","max","mean","std"])
-        csv_path = os.path.join(self.proc_path, "metrics.csv")
-        df.to_csv(csv_path, index=False); return csv_path
+        with self._db_cursor() as cur:
+            df = pd.DataFrame(
+                cur.execute("SELECT * FROM depth_metrics").fetchall(),
+                columns=["id", "timestamp", "min", "max", "mean", "std", "frame_count"]
+            )
+            path = os.path.join(self.proc_path or ".", "metrics.csv")
+            df.to_csv(path, index=False)
+            return path
 
 depth_store = DepthStore()

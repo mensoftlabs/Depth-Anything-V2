@@ -18,3 +18,4 @@ pyvista
 stpyvista
 streamlit-echarts
 requests
+streamlit-autorefresh
