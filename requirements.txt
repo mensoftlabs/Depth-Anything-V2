@@ -19,3 +19,4 @@ stpyvista
 streamlit-echarts
 requests
 streamlit-autorefresh
+streamlit-image-coordinates

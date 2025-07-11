@@ -1,364 +1,443 @@
-import os
-import time
-from datetime import datetime
-import requests
-import pandas as pd
 import streamlit as st
+import cv2
+import numpy as np
+import pandas as pd
+from PIL import Image
+import torch
+import os
+import tempfile
+from scipy.ndimage import gaussian_filter
+from streamlit_image_coordinates import streamlit_image_coordinates
 from streamlit_echarts import st_echarts
-from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# Configuration
-API = os.getenv("DEPTHVISION_API", "http://192.168.1.42:8000")
-RAW_URL = f"{API}/mjpeg/raw"
-DEPTH_URL = f"{API}/mjpeg/depth"
+# Importa el modelo desde tu módulo local.
+# Asegúrate de que el directorio 'depth_anything_v2' esté en la misma carpeta o en el PYTHONPATH.
+try:
+    from depth_anything_v2.dpt import DepthAnythingV2
+except ImportError:
+    st.error("Error: No se pudo importar `DepthAnythingV2`. Asegúrate de que el directorio del modelo (`depth_anything_v2`) está accesible.")
+    st.stop()
 
-# App setup
+
+# --- Configuración de la Página ---
 st.set_page_config(
-    page_title="DepthVision Live",
-    page_icon="🌊",
+    page_title="DepthVision AI Processor",
+    page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed",
 )
 
-# Custom CSS for better appearance
-st.markdown("""
-    <style>
-    .metric-container {
-        border: 1px solid rgba(49, 51, 63, 0.2);
-        border-radius: 0.5rem;
-        padding: 1rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .st-emotion-cache-1v0mbdj {
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    }
-    .stButton button {
-        width: 100%;
-    }
-    </style>
-""", unsafe_allow_html=True)
 
-# Session state for persistent variables
-if 'last_update' not in st.session_state:
-    st.session_state.last_update = 0
-if 'data_cache' not in st.session_state:
-    st.session_state.data_cache = None
+# --- Lógica del Backend (Adaptada de main.py) ---
 
-# Sidebar controls
-with st.sidebar:
-    st.header("⚙️ Configuration")
+@st.cache_resource(show_spinner="Cargando modelo de IA (puede tardar un momento)...")
+def load_model(encoder="vitl"):
+    """
+    Carga el modelo DepthAnythingV2 desde un checkpoint local.
+    Utiliza st.cache_resource para asegurar que el modelo se cargue solo una vez.
+    """
+    if not torch.cuda.is_available():
+        st.error("Error Crítico: Se requiere una GPU, pero CUDA no está disponible. La aplicación no puede continuar.")
+        st.stop()
     
-    REFRESH_MS = st.slider(
-        "Refresh interval (ms)",
-        200, 5000, 1000, 200,
-        help="Controls how often the dashboard updates metrics and charts"
-    )
+    device = torch.device("cuda")
     
-    st.caption(f"Connected to backend: `{API}`")
-    
-    # Health check
+    checkpoint_path = f"checkpoints/depth_anything_v2_{encoder}.pth"
+    if not os.path.exists(checkpoint_path):
+        st.error(f"Error Crítico: No se encontró el checkpoint del modelo en `{checkpoint_path}`.")
+        st.error("Por favor, descarga el checkpoint y colócalo en el directorio 'checkpoints'.")
+        st.stop()
+        
     try:
-        health = requests.get(f"{API}/health", timeout=2).json()
-        st.success(f"✅ Backend healthy (v{health.get('version', '1.0')})")
-    except requests.RequestException:
-        st.error("❌ Backend unavailable")
+        cfg = {"encoder": encoder, "features": 256, "out_channels": [256, 512, 1024, 1024]}
+        model = DepthAnythingV2(**cfg)
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        model.to(device).eval()
+        st.success(f"Modelo '{encoder}' cargado exitosamente en la GPU.")
+        return model, device
+    except Exception as e:
+        st.error(f"Error al cargar el modelo: {e}")
+        st.stop()
 
-# Auto-refresh
-try:
-    st.autorefresh(interval=REFRESH_MS, key="auto")
-except AttributeError:
-    from streamlit_autorefresh import st_autorefresh
-    st_autorefresh(interval=REFRESH_MS, key="auto")
 
-# Header
-logo, title = st.columns([1, 5])
-with logo:
-    st.image("logo.png", width=100)
-with title:
-    st.title("DepthVision Live")
-    st.markdown("Real-time depth estimation with advanced analytics")
-    st.caption(datetime.now().strftime("%d %b %Y %H:%M:%S"))
+def predict_depth(model, device, img_array_rgb):
+    """
+    Toma un array numpy (imagen RGB), lo procesa con el modelo y devuelve
+    el mapa de profundidad, métricas y un mapa de profundidad coloreado.
+    """
+    if model is None:
+        return None, None, None
 
-st.markdown("---")
-
-# Recording controls
-def _call_api(endpoint, success_msg, error_msg):
-    try:
-        response = requests.post(f"{API}{endpoint}", timeout=2)
-        response.raise_for_status()
-        st.success(success_msg)
-        time.sleep(0.3)  # Small delay for UI update
-        st.experimental_rerun()
-    except requests.RequestException as e:
-        st.error(f"{error_msg}: {str(e)}")
-
-rec_col1, rec_col2, rec_col3 = st.columns([1, 1, 3])
-with rec_col1:
-    if st.button("🎥 Start Recording"):
-        _call_api(
-            "/record/start",
-            "Recording started",
-            "Failed to start recording"
-        )
-with rec_col2:
-    if st.button("⏹️ Stop Recording"):
-        _call_api(
-            "/record/stop",
-            "Recording stopped",
-            "Failed to stop recording"
-        )
-
-# Get recording status
-try:
-    rec_status = requests.get(f"{API}/record/status", timeout=1).json()
-    is_recording = rec_status.get("recording", False)
-    status_text = "🟢 Recording" if is_recording else "🔴 Inactive"
-    rec_col3.markdown(
-        f"**Status:** <span style='color: {'green' if is_recording else 'red'}'>{status_text}</span>",
-        unsafe_allow_html=True
-    )
-except requests.RequestException:
-    rec_col3.error("Could not fetch recording status")
-
-st.markdown("---")
-
-# Video streams
-st.subheader("Live Streams")
-stream_col1, stream_col2 = st.columns(2)
-
-with stream_col1:
-    st.markdown("**Original Stream**")
-    st.markdown(
-        f"""
-        <div style="position: relative;">
-            <img src="{RAW_URL}" width="100%" style="border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.3);">
-            <div style="position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.5); color: white; padding: 2px 5px; border-radius: 3px; font-size: 12px;">
-                LIVE
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-with stream_col2:
-    st.markdown("**Depth Estimation**")
-    st.markdown(
-        f"""
-        <div style="position: relative;">
-            <img src="{DEPTH_URL}" width="100%" style="border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.3);">
-            <div style="position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.5); color: white; padding: 2px 5px; border-radius: 3px; font-size: 12px;">
-                LIVE
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-# Metrics
-st.subheader("Depth Metrics")
-try:
-    latest = requests.get(f"{API}/metrics/latest", timeout=1).json()
+    with torch.no_grad():
+        # El modelo DepthAnythingV2 espera una imagen en formato BGR
+        img_bgr = cv2.cvtColor(img_array_rgb, cv2.COLOR_RGB2BGR)
+        depth_map_raw = model.infer_image(img_bgr) 
     
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("Minimum", f"{latest.get('min', 0):.4f}")
-    with m2:
-        st.metric("Maximum", f"{latest.get('max', 0):.4f}")
-    with m3:
-        st.metric("Mean", f"{latest.get('mean', 0):.4f}")
-    with m4:
-        st.metric("Std Dev", f"{latest.get('std', 0):.4f}")
-except requests.RequestException:
-    st.warning("Could not fetch latest metrics")
+    # Calcular métricas desde el mapa de profundidad raw
+    metrics = {
+        "min": float(np.min(depth_map_raw)),
+        "max": float(np.max(depth_map_raw)),
+        "mean": float(np.mean(depth_map_raw)),
+        "std": float(np.std(depth_map_raw)),
+    }
 
-# Charts
-st.subheader("Time Series Analysis")
-try:
-    # Get data with caching
-    current_time = time.time()
-    if (current_time - st.session_state.last_update > 2) or not st.session_state.data_cache:
-        data = requests.get(f"{API}/metrics/timeseries", timeout=1).json()
-        st.session_state.data_cache = data
-        st.session_state.last_update = current_time
-    else:
-        data = st.session_state.data_cache
-    
-    if data and data["t"]:
-        base_time = data["t"][0]
-        df = pd.DataFrame({
-            "Time": [round(t - base_time, 2) for t in data["t"]],
-            "Mean": data["mean"],
-            "Std Dev": data["std"],
-            "Min": data["min"],
-            "Max": data["max"]
+    # Normalizar para visualización y aplicar colormap
+    depth_normalized = cv2.normalize(depth_map_raw, None, 0, 1, cv2.NORM_MINMAX, cv2.CV_32F)
+    depth_colored = (cv2.applyColorMap((depth_normalized * 255).astype(np.uint8), cv2.COLORMAP_VIRIDIS))
+    depth_colored = cv2.cvtColor(depth_colored, cv2.COLOR_BGR2RGB)
+
+    return depth_map_raw, metrics, depth_colored
+
+
+def analyze_volume(depth_maps, noise_threshold=0.01):
+    """
+    Realiza un análisis de volumen entre fotogramas.
+    Compara el mapa de profundidad de cada fotograma con el del primer fotograma.
+    """
+    if not depth_maps or len(depth_maps) < 2:
+        return []
+
+    analysis_results = []
+    base_depth_map = depth_maps[0]
+
+    for i in range(1, len(depth_maps)):
+        current_depth_map = depth_maps[i]
+        
+        diff = current_depth_map - base_depth_map
+        diff[np.abs(diff) < noise_threshold] = 0
+        
+        total_pixels = diff.size
+        changed_pixels = np.count_nonzero(diff)
+        
+        analysis_results.append({
+            "Frame (vs. Frame 0)": i,
+            "Volume Change": float(diff.sum()),
+            "Added Volume": float(diff[diff > 0].sum()),
+            "Removed Volume": float(np.abs(diff[diff < 0].sum())),
+            "Mean Depth Change": float(diff.mean()),
+            "Changed Area (%)": (changed_pixels / total_pixels) * 100 if total_pixels > 0 else 0,
         })
         
-        # Chart options
-        def create_chart_options(title, y_axis, series_data, series_name):
-            return {
-                "title": {"text": title, "left": "center"},
-                "tooltip": {
-                    "trigger": "axis",
-                    "axisPointer": {"type": "cross", "label": {"backgroundColor": "#6a7985"}}
-                },
-                "legend": {"data": [series_name], "top": 30},
-                "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
-                "xAxis": {
-                    "type": "category",
-                    "boundaryGap": False,
-                    "data": df["Time"].tolist(),
-                    "name": "Time (s)"
-                },
-                "yAxis": {"type": "value", "name": y_axis},
-                "series": [{
-                    "name": series_name,
-                    "type": "line",
-                    "stack": "Total",
-                    "smooth": True,
-                    "lineStyle": {"width": 3},
-                    "showSymbol": False,
-                    "areaStyle": {"opacity": 0.1},
-                    "emphasis": {"focus": "series"},
-                    "data": series_data
-                }],
-                "dataZoom": [{
-                    "type": "inside",
-                    "start": 0,
-                    "end": 100
-                }, {
-                    "start": 0,
-                    "end": 100
-                }]
-            }
-        
-        # Display charts in tabs
-        tab1, tab2, tab3 = st.tabs(["📈 Mean Depth", "📉 Standard Deviation", "📊 Min/Max"])
-        
-        with tab1:
-            st_echarts(
-                create_chart_options(
-                    "Mean Depth Over Time",
-                    "Depth Value",
-                    [round(v, 4) for v in df["Mean"]],
-                    "Mean Depth"
-                ),
-                height="400px",
-                key="mean_chart"
-            )
-        
-        with tab2:
-            st_echarts(
-                create_chart_options(
-                    "Standard Deviation Over Time",
-                    "Std Dev",
-                    [round(v, 4) for v in df["Std Dev"]],
-                    "Standard Deviation"
-                ),
-                height="400px",
-                key="std_chart"
-            )
-        
-        with tab3:
-            options = {
-                "title": {"text": "Depth Range Over Time", "left": "center"},
-                "tooltip": {"trigger": "axis"},
-                "legend": {"data": ["Min Depth", "Max Depth"], "top": 30},
-                "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
-                "xAxis": {"type": "category", "data": df["Time"].tolist(), "name": "Time (s)"},
-                "yAxis": {"type": "value", "name": "Depth Value"},
-                "series": [
-                    {
-                        "name": "Min Depth",
-                        "type": "line",
-                        "smooth": True,
-                        "data": [round(v, 4) for v in df["Min"]],
-                        "lineStyle": {"width": 2},
-                        "showSymbol": False
-                    },
-                    {
-                        "name": "Max Depth",
-                        "type": "line",
-                        "smooth": True,
-                        "data": [round(v, 4) for v in df["Max"]],
-                        "lineStyle": {"width": 2},
-                        "showSymbol": False
-                    }
-                ],
-                "dataZoom": [{"type": "inside"}, {}]
-            }
-            st_echarts(options, height="400px", key="minmax_chart")
-    else:
-        st.info("No data available. Start recording to collect metrics.")
-except requests.RequestException:
-    st.error("Could not fetch time series data")
+    return analysis_results
 
-# Histogram visualization
-st.subheader("Depth Distribution")
-try:
-    hist_data = requests.get(f"{API}/metrics/hist", timeout=1).json()
-    if hist_data["edges"] and hist_data["counts"]:
-        options = {
-            "title": {"text": "Accumulated Depth Histogram", "left": "center"},
-            "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-            "xAxis": {
-                "type": "category",
-                "data": [f"{hist_data['edges'][i]:.2f}-{hist_data['edges'][i+1]:.2f}" 
-                         for i in range(len(hist_data['counts']))],
-                "axisLabel": {"rotate": 45}
-            },
-            "yAxis": {"type": "value", "name": "Count"},
-            "series": [{
-                "data": hist_data["counts"],
-                "type": "bar",
-                "barWidth": "99%",
-                "itemStyle": {
-                    "color": {
-                        "type": "linear",
-                        "x": 0, "y": 0, "x2": 0, "y2": 1,
-                        "colorStops": [
-                            {"offset": 0, "color": "#5470c6"},
-                            {"offset": 1, "color": "#91cc75"}
-                        ]
-                    }
-                }
-            }],
-            "dataZoom": [{"type": "inside"}, {}]
-        }
-        st_echarts(options, height="400px")
-    else:
-        st.info("No histogram data available yet")
-except requests.RequestException:
-    st.error("Could not fetch histogram data")
 
-# Data export
-st.markdown("---")
-st.subheader("Data Export")
-exp_col1, exp_col2 = st.columns([1, 4])
+def analyze_points(depth_maps, points):
+    """
+    Analiza la evolución de la profundidad para un conjunto de puntos seleccionados a través de todos los fotogramas.
+    """
+    if not depth_maps or not points:
+        return []
 
-with exp_col1:
-    if st.button("📥 Download Metrics CSV"):
-        try:
-            csv_response = requests.get(f"{API}/metrics/csv", timeout=5)
-            if csv_response.status_code == 200:
-                st.download_button(
-                    label="Save CSV",
-                    data=csv_response.content,
-                    file_name="depth_metrics.csv",
-                    mime="text/csv"
-                )
-            else:
-                st.error("No data available to download")
-        except requests.RequestException as e:
-            st.error(f"Failed to download: {str(e)}")
+    point_analysis = []
+    num_frames = len(depth_maps)
+    
+    # Crear un stack de mapas de profundidad para una indexación eficiente
+    all_frames_data = np.stack(depth_maps, axis=0)
+    _, height, width = all_frames_data.shape
 
-with exp_col2:
-    st.caption("""
-        Export all collected metrics as a CSV file containing:
-        - Timestamp
-        - Minimum depth value
-        - Maximum depth value
-        - Mean depth value
-        - Standard deviation
-        - Frame count
+    for i, point in enumerate(points):
+        x, y = int(point['x']), int(point['y'])
+        
+        if not (0 <= y < height and 0 <= x < width):
+            continue
+            
+        # Extraer los valores de profundidad para el punto (y, x) de todos los fotogramas a la vez
+        depth_values = all_frames_data[:, y, x]
+        
+        point_analysis.append({
+            "label": f"Punto {i+1} ({x}, {y})",
+            "depth_values": depth_values.tolist(),
+        })
+        
+    return point_analysis
+
+
+# --- Inicialización del Estado de la Sesión ---
+def init_session_state():
+    """Inicializa todas las variables necesarias en el estado de sesión de Streamlit."""
+    STATE_VARS = {
+        "app_status": {"message": "Listo para empezar.", "type": "info"},
+        "video_processed": False,
+        "processing_active": False,
+        "current_frame_index": 0,
+        "total_frames": 0,
+        "selected_points": [],
+        "volume_analysis_results": None,
+        "point_analysis_results": None,
+        "noise_threshold": 0.01,
+        "original_frames": [],
+        "depth_maps_raw": [],
+        "depth_maps_colored": [],
+        "metrics_cache": [],
+    }
+    for var, default_value in STATE_VARS.items():
+        if var not in st.session_state:
+            st.session_state[var] = default_value
+
+init_session_state()
+
+
+# --- Funciones de Ayuda para la UI ---
+def display_status():
+    """Renderiza un mensaje de estado en la parte superior de la página."""
+    status = st.session_state.app_status
+    if status["type"] == "info":
+        st.info(status["message"])
+    elif status["type"] == "processing":
+        st.spinner(status["message"])
+    elif status["type"] == "success":
+        st.success(status["message"])
+    elif status["type"] == "error":
+        st.error(status["message"])
+
+def reset_app_state():
+    """Reinicia el estado para un nuevo trabajo de procesamiento de video."""
+    # Mantiene los resultados del análisis visibles incluso después de reiniciar
+    # para una mejor experiencia de usuario, pero limpia los datos de los fotogramas.
+    st.session_state.video_processed = False
+    st.session_state.processing_active = False
+    st.session_state.current_frame_index = 0
+    st.session_state.total_frames = 0
+    st.session_state.original_frames = []
+    st.session_state.depth_maps_raw = []
+    st.session_state.depth_maps_colored = []
+    st.session_state.metrics_cache = []
+    st.session_state.app_status = {"message": "Listo para un nuevo video.", "type": "info"}
+
+
+# --- Función de Lógica Principal ---
+def process_video_file(video_file, progress_bar):
+    """
+    Extrae fotogramas de un archivo de video subido, procesa cada uno para obtener la profundidad,
+    y almacena los resultados en el estado de sesión.
+    """
+    reset_app_state()
+    st.session_state.processing_active = True
+    
+    model, device = load_model()
+    if not model:
+        st.session_state.processing_active = False
+        return
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tfile:
+        tfile.write(video_file.read())
+        video_path = tfile.name
+
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    st.session_state.total_frames = total_frames
+    
+    status_placeholder = st.empty()
+
+    for i in range(total_frames):
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        progress = (i + 1) / total_frames
+        status_placeholder.info(f"🧠 Procesando fotograma {i + 1}/{total_frames}...")
+        progress_bar.progress(progress)
+        
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        depth_map_raw, metrics, depth_map_colored = predict_depth(model, device, frame_rgb)
+        
+        st.session_state.original_frames.append(frame_rgb)
+        st.session_state.depth_maps_raw.append(depth_map_raw)
+        st.session_state.depth_maps_colored.append(depth_map_colored)
+        st.session_state.metrics_cache.append(metrics)
+        
+    cap.release()
+    os.remove(video_path)
+    progress_bar.empty()
+    status_placeholder.empty()
+
+    st.session_state.app_status = {"message": f"¡Procesamiento completo! {total_frames} fotogramas listos para analizar.", "type": "success"}
+    st.session_state.video_processed = True
+    st.session_state.processing_active = False
+    st.rerun()
+
+
+# --- Funciones de Gráficos ---
+def get_histogram_options(depth_data):
+    if depth_data is None: return {}
+    flat_data = depth_data.flatten()
+    hist, bin_edges = np.histogram(flat_data, bins=50)
+    
+    return {
+        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
+        "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
+        "xAxis": [{"type": "category", "data": [f"{edge:.2f}" for edge in bin_edges[:-1]], "axisTick": {"alignWithLabel": True}}],
+        "yAxis": [{"type": "value", "name": "Conteo de Píxeles"}],
+        "series": [{"name": "Píxeles", "type": "bar", "data": hist.tolist()}],
+        "dataZoom": [{"type": 'slider'}, {"type": 'inside'}]
+    }
+
+def get_point_evolution_options(analysis_data):
+    if not analysis_data: return {}
+    
+    legend_data = [item["label"] for item in analysis_data]
+    series_data = [
+        {"name": item["label"], "type": "line", "smooth": True, "data": item["depth_values"]}
+        for item in analysis_data
+    ]
+    
+    return {
+        "tooltip": {"trigger": "axis"},
+        "legend": {"data": legend_data, "type": "scroll", "bottom": 10},
+        "grid": {"left": '3%', "right": '4%', "bottom": '15%', "containLabel": True},
+        "xAxis": {"type": "category", "boundaryGap": False, "name": "Índice de Fotograma", "data": list(range(st.session_state.total_frames))},
+        "yAxis": {"type": "value", "name": "Valor de Profundidad (Raw)", "scale": True},
+        "series": series_data,
+        "dataZoom": [{"type": 'slider', "bottom": 50}, {"type": 'inside'}]
+    }
+
+# =================================================================================
+# --- 🖥️ DISEÑO DE LA UI DE STREAMLIT ---
+# =================================================================================
+
+st.title("🤖 Procesador IA DepthVision")
+st.markdown("Una aplicación Streamlit para estimación de profundidad monocular y análisis volumétrico a partir de archivos de video.")
+
+display_status()
+
+# --- Controles de la Barra Lateral ---
+with st.sidebar:
+    st.header("⚙️ Controles")
+    uploaded_file = st.file_uploader(
+        "Elige un archivo de video",
+        type=["mp4", "mov", "avi"],
+        disabled=st.session_state.processing_active
+    )
+
+    if uploaded_file and not st.session_state.video_processed:
+        if st.button("Procesar Video", type="primary", use_container_width=True, disabled=st.session_state.processing_active):
+            progress_bar = st.progress(0)
+            process_video_file(uploaded_file, progress_bar)
+            
+    if st.session_state.video_processed:
+        if st.button("Empezar de Nuevo", use_container_width=True):
+            reset_app_state()
+            st.rerun()
+
+# --- Área de Contenido Principal ---
+if not st.session_state.video_processed:
+    st.info("Por favor, sube un archivo de video y haz clic en 'Procesar Video' para comenzar.")
+    st.markdown("---")
+    st.markdown("### Cómo funciona")
+    st.markdown("""
+    1.  **Sube**: Selecciona un archivo de video de tu ordenador.
+    2.  **Procesa**: La aplicación utiliza un potente modelo de IA (**DepthAnythingV2**) para analizar cada fotograma y estimar la distancia de cada píxel a la cámara.
+    3.  **Analiza**: Una vez procesado, puedes:
+        - Navegar entre fotogramas con el deslizador.
+        - Ver mapas de profundidad y estadísticas clave.
+        - Realizar análisis volumétricos para medir cambios a lo largo del tiempo.
+        - Seleccionar puntos específicos en la imagen para rastrear su profundidad en todo el video.
     """)
+
+else:
+    # --- Navegación de Fotogramas ---
+    st.header("🎞️ Explorador de Fotogramas")
+    selected_frame_index = st.slider(
+        "Navegar Fotogramas", 0, st.session_state.total_frames - 1, st.session_state.current_frame_index
+    )
+    st.session_state.current_frame_index = selected_frame_index
+
+    # --- Visualización de Imagen y Mapa de Profundidad ---
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Fotograma Original")
+        st.markdown("Haz clic en la imagen para seleccionar puntos para el análisis.")
+        
+        image_key = f"img_coords_{st.session_state.current_frame_index}"
+        
+        coords = streamlit_image_coordinates(st.session_state.original_frames[selected_frame_index], key=image_key)
+
+        if coords and coords not in st.session_state.selected_points:
+            st.session_state.selected_points.append(coords)
+            st.rerun()
+
+        img_with_points = np.copy(st.session_state.original_frames[selected_frame_index])
+        for i, point in enumerate(st.session_state.selected_points):
+            cv2.circle(img_with_points, (point['x'], point['y']), 5, (255, 0, 0), -1)
+            cv2.putText(img_with_points, str(i+1), (point['x']+7, point['y']+7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 2)
+        st.image(img_with_points, use_container_width=True, caption=f"Fotograma {selected_frame_index + 1}/{st.session_state.total_frames}")
+
+    with col2:
+        st.subheader("Mapa de Profundidad Generado por IA")
+        st.image(
+            st.session_state.depth_maps_colored[selected_frame_index],
+            caption="Los colores indican la profundidad (ej. amarillo más cerca, morado más lejos).",
+            use_container_width=True
+        )
+
+    # --- Visualización de Métricas ---
+    st.subheader("📊 Métricas del Fotograma")
+    m = st.session_state.metrics_cache[selected_frame_index]
+    m_cols = st.columns(4)
+    m_cols[0].metric("Profundidad Mínima", f"{m['min']:.4f}")
+    m_cols[1].metric("Profundidad Máxima", f"{m['max']:.4f}")
+    m_cols[2].metric("Profundidad Media", f"{m['mean']:.4f}")
+    m_cols[3].metric("Desviación Estándar", f"{m['std']:.4f}")
+
+    # --- Gráfico de Histograma ---
+    st.subheader("Distribución de Profundidad")
+    hist_options = get_histogram_options(st.session_state.depth_maps_raw[selected_frame_index])
+    st_echarts(options=hist_options, height="400px")
+
+    st.markdown("---")
+
+    # --- Sección de Análisis ---
+    st.header("🔬 Herramientas de Análisis")
+    
+    analysis_col1, analysis_col2 = st.columns([1, 2])
+
+    with analysis_col1:
+        st.subheader("Controles")
+        
+        st.markdown("**Análisis de Volumen**")
+        st.session_state.noise_threshold = st.number_input("Umbral de Ruido", 0.0, 1.0, st.session_state.noise_threshold, 0.001, format="%.3f")
+        if st.button("Analizar Cambio de Volumen", use_container_width=True):
+            with st.spinner("Calculando cambios de volumen..."):
+                results = analyze_volume(st.session_state.depth_maps_raw, st.session_state.noise_threshold)
+                st.session_state.volume_analysis_results = pd.DataFrame(results)
+        
+        st.markdown("---")
+        
+        st.markdown("**Análisis de Profundidad de Puntos**")
+        st.write(f"**{len(st.session_state.selected_points)}** punto(s) seleccionado(s).")
+        
+        c1, c2 = st.columns(2)
+        if c1.button("Analizar Puntos Seleccionados", use_container_width=True, disabled=not st.session_state.selected_points):
+            with st.spinner("Rastreando puntos a través de todos los fotogramas..."):
+                results = analyze_points(st.session_state.depth_maps_raw, st.session_state.selected_points)
+                st.session_state.point_analysis_results = results
+        
+        if c2.button("Limpiar Puntos", use_container_width=True, disabled=not st.session_state.selected_points):
+            st.session_state.selected_points = []
+            st.session_state.point_analysis_results = None
+            st.rerun()
+
+    with analysis_col2:
+        st.subheader("Resultados")
+        
+        if st.session_state.volume_analysis_results is not None:
+            st.markdown("##### Resultados del Análisis de Volumen (vs. Fotograma 0)")
+            st.dataframe(st.session_state.volume_analysis_results)
+            
+            csv = st.session_state.volume_analysis_results.to_csv(index=False).encode('utf-8')
+            st.download_button("Descargar Datos de Volumen (CSV)", csv, "volume_analysis.csv", "text/csv")
+
+        if st.session_state.point_analysis_results is not None:
+            st.markdown("##### Evolución de la Profundidad de los Puntos")
+            point_chart_options = get_point_evolution_options(st.session_state.point_analysis_results)
+            st_echarts(options=point_chart_options, height="500px")
+
+            df_point_data = pd.DataFrame()
+            df_point_data['frame_index'] = list(range(st.session_state.total_frames))
+            for item in st.session_state.point_analysis_results:
+                df_point_data[item['label']] = item['depth_values']
+
+            csv_points = df_point_data.to_csv(index=False).encode('utf-8')
+            st.download_button("Descargar Datos de Puntos (CSV)", csv_points, "point_analysis.csv", "text/csv")

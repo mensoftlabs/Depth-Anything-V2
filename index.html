@@ -160,6 +160,7 @@
         let videoFile = null, videoElement = document.createElement('video'), isProcessing = false;
         let currentFrame = 0, totalFrames = 0, histogramChart = null, db = null, sessionId = null;
         let selectedPoints = [], pointChart = null, hoveredPoint = null;
+        let currentFrameSource = null; // Fuente unificada para frames (video o imagen)
 
         // --- DOM Elements ---
         const selectBtn = document.getElementById('selectBtn'), processBtn = document.getElementById('processBtn');
@@ -234,15 +235,40 @@
             return await response.json();
         }
         
-        function drawOriginalFrame(image, clearPoints = false) {
+        function drawOriginalFrame(source, clearPoints = false) {
             const canvas = originalCanvas;
-            const vw = image.videoWidth || image.width;
-            const vh = image.videoHeight || image.height;
+            let vw, vh;
+            
+            if (source) {
+                // Manejar diferentes tipos de fuente (video o imagen)
+                if (source instanceof HTMLVideoElement) {
+                    vw = source.videoWidth;
+                    vh = source.videoHeight;
+                } else if (source instanceof HTMLImageElement) {
+                    vw = source.naturalWidth;
+                    vh = source.naturalHeight;
+                } else {
+                    vw = canvas.width;
+                    vh = canvas.height;
+                }
+            } else {
+                vw = canvas.width;
+                vh = canvas.height;
+            }
+
             if (vw === 0) return;
             canvas.width = vw;
             canvas.height = vh;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(image, 0, 0, vw, vh);
+            
+            // Limpiar y dibujar la fuente si está disponible
+            if (source) {
+                ctx.drawImage(source, 0, 0, vw, vh);
+            } else {
+                ctx.clearRect(0, 0, vw, vh);
+            }
+            
+            // Manejar puntos seleccionados
             if (clearPoints) selectedPoints = [];
             ctx.strokeStyle = 'white';
             ctx.lineWidth = 1;
@@ -253,6 +279,8 @@
                 ctx.fill();
                 ctx.stroke();
             });
+            
+            // Dibujar punto hover si existe
             if (hoveredPoint) {
                 ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
                 ctx.fillRect(hoveredPoint.x + 10, hoveredPoint.y - 25, 80, 20);
@@ -265,8 +293,8 @@
         }
         
         async function processFrame(frameImage) {
-            const vw = frameImage.videoWidth;
-            const vh = frameImage.videoHeight;
+            const vw = frameImage.videoWidth || frameImage.naturalWidth;
+            const vh = frameImage.videoHeight || frameImage.naturalHeight;
             if (vw === 0 || vh === 0) throw new Error("Video dimensions not available.");
             drawOriginalFrame(frameImage);
             const imageData = originalCanvas.getContext('2d').getImageData(0, 0, vw, vh);
@@ -544,7 +572,7 @@
             hoveredPoint = null;
             analyzePointsBtn.disabled = true;
             clearPointsBtn.disabled = true;
-            drawOriginalFrame(videoElement);
+            drawOriginalFrame(currentFrameSource);
             pointAnalysisContainer.style.display = 'none';
         }
 
@@ -553,16 +581,13 @@
             if (frameIndex < 0 || frameIndex >= totalFrames) return;
             
             try {
-                const paddedIndex = String(frameIndex).padStart(5, '0');
-                // URL corregida sin parámetro de tiempo
-                const frameUrl = `http://192.168.1.42:8000/session_data/${sessionId}/recorded_frames/frame_${paddedIndex}.jpg`;
-                
                 videoProgressText.textContent = `Loading frame ${frameIndex + 1}/${totalFrames}`;
                 await loadFrame(frameIndex);
                 currentFrame = frameIndex;
                 
                 // Actualizar controles de navegación
                 updateFrameControls();
+                preloadAdjacentFrames();
                 
             } catch (error) {
                 console.error("Error loading frame:", error);
@@ -594,19 +619,16 @@
                 img.crossOrigin = 'Anonymous';
                 
                 img.onload = () => {
-                    originalCanvas.width = img.width;
-                    originalCanvas.height = img.height;
-                    const ctx = originalCanvas.getContext('2d');
-                    ctx.clearRect(0, 0, originalCanvas.width, originalCanvas.height);
-                    ctx.drawImage(img, 0, 0);
+                    currentFrameSource = img;  // Establecer como fuente actual
+                    drawOriginalFrame(currentFrameSource);
                     resolve();
                 };
                 
                 img.onerror = () => {
-                    reject(new Error(`No se pudo cargar el frame ${frameIndex} desde ${frameUrl}`));
+                    reject(new Error(`Could not load frame ${frameIndex} from ${frameUrl}`));
                 };
                 
-                img.src = frameUrl;
+                img.src = frameUrl + '?t=' + Date.now(); // Cache buster
             });
         }
 
@@ -632,20 +654,20 @@
         exportBtn.addEventListener('click', exportMetricsData);
 
         originalCanvas.addEventListener('click', (e) => {
-            if (!videoFile || isProcessing) return;
+            if (!currentFrameSource || isProcessing) return;
             const rect = originalCanvas.getBoundingClientRect();
             const scaleX = originalCanvas.width / rect.width;
             const scaleY = originalCanvas.height / rect.height;
             const x = Math.round((e.clientX - rect.left) * scaleX);
             const y = Math.round((e.clientY - rect.top) * scaleY);
             selectedPoints.push({ x, y });
-            drawOriginalFrame(videoElement);
+            drawOriginalFrame(currentFrameSource);
             if (!isProcessing) analyzePointsBtn.disabled = false;
             clearPointsBtn.disabled = false;
         });
         
         originalCanvas.addEventListener('mousemove', (e) => {
-            if (!videoFile || selectedPoints.length === 0) return;
+            if (!currentFrameSource || selectedPoints.length === 0) return;
             const rect = originalCanvas.getBoundingClientRect();
             const scaleX = originalCanvas.width / rect.width;
             const scaleY = originalCanvas.height / rect.height;
@@ -661,14 +683,14 @@
             }
             if (hoveredPoint !== foundPoint) {
                 hoveredPoint = foundPoint;
-                drawOriginalFrame(videoElement);
+                drawOriginalFrame(currentFrameSource);
             }
         });
 
         originalCanvas.addEventListener('mouseout', () => {
             if (hoveredPoint) {
                 hoveredPoint = null;
-                drawOriginalFrame(videoElement);
+                drawOriginalFrame(currentFrameSource);
             }
         });
 
@@ -686,7 +708,8 @@
                     videoElement.onloadedmetadata = () => {
                         totalFrames = Math.floor(videoElement.duration * 30);
                         currentFrame = 0;
-                        drawOriginalFrame(videoElement, true);
+                        currentFrameSource = videoElement;
+                        drawOriginalFrame(currentFrameSource, true);
                         resolve();
                     };
                     videoElement.onerror = () => reject(new Error('Error loading video metadata'));
@@ -705,18 +728,102 @@
             }
         });
 
-        processBtn.addEventListener('click', () => {
-            if (!videoFile || isProcessing) return;
-            isProcessing = true;
-            processBtn.disabled = true;
-            stopBtn.disabled = false;
-            analyzeVolumeBtn.disabled = true;
-            analyzePointsBtn.disabled = true;
-            clearPointsBtn.disabled = true;
-            exportBtn.disabled = true;
-            analysisResultsContainer.style.display = 'none';
-            pointAnalysisContainer.style.display = 'none';
-            processVideo();
+        processBtn.addEventListener('click', async () => {
+            if (isProcessing) return;
+            
+            // Caso 1: Video cargado desde archivo
+            if (videoFile) {
+                isProcessing = true;
+                processBtn.disabled = true;
+                stopBtn.disabled = false;
+                analyzeVolumeBtn.disabled = true;
+                analyzePointsBtn.disabled = true;
+                clearPointsBtn.disabled = true;
+                exportBtn.disabled = true;
+                analysisResultsContainer.style.display = 'none';
+                pointAnalysisContainer.style.display = 'none';
+                processVideo();
+            } 
+            // Caso 2: Frames grabados
+            else if (sessionId && totalFrames > 0) {
+                isProcessing = true;
+                processBtn.disabled = true;
+                stopBtn.disabled = false;
+                analyzeVolumeBtn.disabled = true;
+                analyzePointsBtn.disabled = true;
+                clearPointsBtn.disabled = true;
+                exportBtn.disabled = true;
+                analysisResultsContainer.style.display = 'none';
+                pointAnalysisContainer.style.display = 'none';
+                
+                try {
+                    updateStatus(`Processing ${totalFrames} recorded frames...`, 'processing');
+                    
+                    for (let i = 0; i < totalFrames && isProcessing; i++) {
+                        currentFrame = i;
+                        updateStatus(`Processing frame ${i + 1} of ${totalFrames}...`, 'processing');
+                        updateFrameControls();
+                        
+                        // Cargar el frame actual
+                        await loadFrame(i);
+                        
+                        // Procesar el frame
+                        const imageData = originalCanvas.getContext('2d').getImageData(0, 0, originalCanvas.width, originalCanvas.height);
+                        const result = await getDepthFromBackend(imageData, sessionId, i);
+                        const metrics = { min: result.min, max: result.max, mean: result.mean, std: result.std };
+                        
+                        // Actualizar visualización
+                        depthCanvas.width = originalCanvas.width;
+                        depthCanvas.height = originalCanvas.height;
+                        const depthCtx = depthCanvas.getContext('2d');
+                        const depthImageData = depthCtx.createImageData(originalCanvas.width, originalCanvas.height);
+                        const colormap = Array.from({ length: 256 }, (_, i) => {
+                            const t = i / 255;
+                            const r = Math.min(255, 255 * Math.pow(t, 0.5) + 10);
+                            const g = Math.min(255, 255 * Math.pow(t, 1.0));
+                            const b = Math.min(255, 255 * Math.pow(t, 2.0) + 20);
+                            return [r, g, b];
+                        });
+                        
+                        for (let y = 0; y < originalCanvas.height; y++) {
+                            for (let x = 0; x < originalCanvas.width; x++) {
+                                const idx = (y * originalCanvas.width + x) * 4;
+                                if (result.depth && result.depth[y] !== undefined) {
+                                    const color = colormap[Math.min(255, Math.floor(result.depth[y][x] * 255))];
+                                    depthImageData.data.set(color, idx);
+                                    depthImageData.data[idx + 3] = 255;
+                                }
+                            }
+                        }
+                        
+                        depthCtx.putImageData(depthImageData, 0, 0);
+                        minValue.textContent = metrics.min.toFixed(4);
+                        maxValue.textContent = metrics.max.toFixed(4);
+                        meanValue.textContent = metrics.mean.toFixed(4);
+                        stdValue.textContent = metrics.std.toFixed(4);
+                        updateHistogram(result.depth.flat());
+                        
+                        await saveMetrics(i, metrics);
+                    }
+                    
+                    if (isProcessing) {
+                        updateStatus(`Processing complete. ${totalFrames} frames processed.`, 'ready');
+                        analyzeVolumeBtn.disabled = false;
+                        exportBtn.disabled = false;
+                        if (selectedPoints.length > 0) {
+                            analyzePointsBtn.disabled = false;
+                            clearPointsBtn.disabled = false;
+                        }
+                    }
+                } catch (error) {
+                    updateStatus(`Error processing frame ${currentFrame + 1}: ${error.message}`, 'error');
+                    console.error(error);
+                } finally {
+                    isProcessing = false;
+                    processBtn.disabled = false;
+                    stopBtn.disabled = true;
+                }
+            }
         });
 
         stopBtn.addEventListener('click', () => {
@@ -756,6 +863,8 @@
                 analysisResultsContainer.style.display = 'none';
                 pointAnalysisContainer.style.display = 'none';
                 clearSelectedPoints();
+                currentFrameSource = null;
+                drawOriginalFrame(null, true);
                 
                 // Mostrar controles de progreso
                 videoProgressContainer.style.display = "block";
@@ -770,7 +879,6 @@
             }
         });
 
-        // Reemplaza el event listener de stopRecordingBtn con este:
         stopRecordingBtn.addEventListener('click', async () => {
             try {
                 updateStatus("Finalizando grabación...", "processing");
