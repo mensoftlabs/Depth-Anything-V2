@@ -31,7 +31,9 @@
 ---
 
 ## Directory Structure
-''Depth-Anything-V2/
+
+```bash
+Depth-Anything-V2/
 │
 ├── app.py # Gradio app (original demo)
 ├── main.py # Entrypoint or CLI
@@ -44,8 +46,8 @@
 ├── streamlit_app/ # Streamlit-specific modules/assets
 ├── requirements.txt # Python dependencies
 ├── README.md # This file
-└── ... (other folders)''
-
+└── ... (other folders)
+```
 
 ---
 
