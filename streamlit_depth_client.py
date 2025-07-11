@@ -8,7 +8,7 @@ from streamlit_echarts import st_echarts
 from streamlit.runtime.scriptrunner import add_script_run_ctx
 
 # Configuration
-API = os.getenv("DEPTHVISION_API", "http://localhost:8000")
+API = os.getenv("DEPTHVISION_API", "http://192.168.1.42:8000")
 RAW_URL = f"{API}/mjpeg/raw"
 DEPTH_URL = f"{API}/mjpeg/depth"
 
