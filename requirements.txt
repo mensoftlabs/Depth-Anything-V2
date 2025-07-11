@@ -1,7 +1,6 @@
 gradio_imageslider
 gradio
 matplotlib
-opencv-python
 torch
 torchvision
 streamlit
@@ -20,3 +19,5 @@ streamlit-echarts
 requests
 streamlit-autorefresh
 streamlit-image-coordinates
+streamlit-webrtc
+streamlit-lottie
