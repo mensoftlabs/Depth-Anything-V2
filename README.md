@@ -111,6 +111,7 @@ If you use this app or parts of it in your research or projects, please consider
   journal={arXiv:2406.09414},
   year={2024}
 }
+```
 License
 App code: Apache-2.0
 
