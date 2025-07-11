@@ -13,7 +13,7 @@
 **DepthLayers** is a modern web application for **3D depth estimation and volumetric analysis from video**. It leverages the powerful [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) model to enable researchers, engineers, and creators to upload short videos, extract depth maps frame-by-frame, analyze volumetric changes, and interactively track 3D points—all in an intuitive Streamlit interface.
 
 - **Live Demo:** [depthlayers.streamlit.app](https://depthlayers.streamlit.app/)
-- **Author:** [Your Name or LinkedIn/GitHub Profile](#)
+- **Author:** https://github.com/alvarovaqueroserantes(#)
 - **License:** Apache-2.0 (app) / CC-BY-NC-4.0 (model weights)
 
 ---
