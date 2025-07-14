@@ -378,8 +378,9 @@ def stop_and_finalize_recording():
     return False
 
 def frame_url(sid, idx):
-    """Construye la URL para un frame específico."""
-    return f"{RECORDING_SERVER}/session_data/{sid}/recorded_frames/frame_{idx:05d}.jpg"
+    """Construye la URL para un frame específico, según la cámara activa."""
+    subdir = st.session_state.get("camera_subdir", "recorded_frames")
+    return f"{RECORDING_SERVER}/session_data/{sid}/{subdir}/frame_{idx:05d}.jpg"
 
 def load_frame_from_url(url):
     """Descarga una imagen desde una URL."""
@@ -462,6 +463,18 @@ if not st.session_state.video_processed:
                 if up and st.button("Procesar Vídeo", use_container_width=True, type="primary"):
                     process_video_file(up)
             with tab_live:
+                # Cámara seleccionada (asociada a endpoint y carpeta)
+                CAMERAS = {
+                    "Cámara 1": ("recorded_frames", "/upload"),
+                    "Cámara 2": ("recorded_frames_2", "/upload/2"),
+                    "Cámara 3": ("recorded_frames_3", "/upload/3"),
+                    "Cámara 4": ("recorded_frames_4", "/upload/4"),
+                }
+
+                camera_label = st.selectbox("Selecciona la cámara", list(CAMERAS.keys()), index=0)
+                camera_subdir, camera_endpoint = CAMERAS[camera_label]
+                st.session_state["camera_subdir"] = camera_subdir
+                st.session_state["camera_endpoint"] = camera_endpoint
                 live_placeholder = st.empty()
                 if st.session_state.previewing:
                     st.markdown("<div class='status-indicator preview-active'>PREVISUALIZACIÓN ACTIVA</div>", unsafe_allow_html=True)
