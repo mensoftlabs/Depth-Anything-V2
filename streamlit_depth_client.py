@@ -38,62 +38,125 @@ def load_css():
     st.markdown(
         """
         <style>
+            :root {
+                --primary: #2c3e50;
+                --secondary: #3498db;
+                --accent: #1abc9c;
+                --light: #ecf0f1;
+                --dark: #2c3e50;
+                --success: #27ae60;
+                --warning: #f39c12;
+                --danger: #e74c3c;
+            }
+            
             .stApp {
-                background-color: #F0F2F6;
+                background-color: #f8f9fa;
+                color: var(--dark);
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             }
+            
+            h1, h2, h3 {
+                color: var(--primary);
+                font-weight: 600;
+                margin-bottom: 0.5rem;
+            }
+            
             .stButton>button {
-                border-radius: 10px;
-                border: 2px solid #2E7D32;
-                color: #2E7D32;
-                transition: all 0.2s ease-in-out;
+                border-radius: 4px;
+                border: 1px solid var(--secondary);
+                background-color: white;
+                color: var(--secondary);
+                font-weight: 500;
+                transition: all 0.2s ease;
+                padding: 0.5rem 1rem;
             }
+            
             .stButton>button:hover {
-                background-color: #C8E6C9;
-                color: #1B5E20;
-                border-color: #1B5E20;
+                background-color: #eaf5ff;
+                color: var(--secondary);
+                border-color: var(--secondary);
             }
+            
             .stButton>button[kind="primary"] {
-                background-color: #2E7D32;
+                background-color: var(--secondary);
                 color: white;
                 border: none;
             }
+            
             .stButton>button[kind="primary"]:hover {
-                background-color: #1B5E20;
+                background-color: #2980b9;
             }
+            
             .card {
                 background: white;
-                border-radius: 15px;
-                padding: 20px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-                margin-bottom: 20px;
-            }
-            .card h3 {
-                margin-top: 0;
-                color: #1B5E20;
-                border-bottom: 2px solid #E8F5E9;
-                padding-bottom: 10px;
-            }
-            .recording-status {
-                padding: 0.5rem 1rem;
                 border-radius: 8px;
-                text-align: center;
+                padding: 1.5rem;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+                margin-bottom: 1.5rem;
+                border: 1px solid #e0e0e0;
+            }
+            
+            .card-title {
+                margin-top: 0;
+                color: var(--primary);
+                font-weight: 600;
+                padding-bottom: 0.75rem;
+                border-bottom: 1px solid #eee;
                 margin-bottom: 1rem;
-                font-weight: bold;
             }
+            
+            .status-indicator {
+                display: inline-block;
+                padding: 0.25rem 0.75rem;
+                border-radius: 4px;
+                font-size: 0.85rem;
+                font-weight: 500;
+                margin-bottom: 1rem;
+            }
+            
             .recording-active {
-                background-color: #E57373;
-                color: white;
+                background-color: #fdecea;
+                color: var(--danger);
+                border: 1px solid #fadbd8;
             }
+            
             .preview-active {
-                background-color: #64B5F6;
-                color: white;
+                background-color: #ebf5fb;
+                color: var(--secondary);
+                border: 1px solid #d6eaf8;
+            }
+            
+            .metric-card {
+                background: #f8f9fa;
+                border-radius: 6px;
+                padding: 1rem;
+                text-align: center;
+                border-left: 3px solid var(--secondary);
+            }
+            
+            .metric-title {
+                font-size: 0.9rem;
+                color: #7f8c8d;
+                margin-bottom: 0.25rem;
+            }
+            
+            .metric-value {
+                font-size: 1.25rem;
+                font-weight: 600;
+                color: var(--primary);
+            }
+            
+            .divider {
+                height: 1px;
+                background: #e0e0e0;
+                margin: 1.5rem 0;
             }
         </style>
         """, unsafe_allow_html=True)
 
 @contextmanager
 def card(title: str | None = None):
-    st.markdown(f"<div class='card'>{'<h3>'+title+'</h3>' if title else ''}", unsafe_allow_html=True)
+    st.markdown(f"<div class='card'>{'<div class=\"card-title\">'+title+'</div>' if title else ''}", unsafe_allow_html=True)
     yield
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -332,20 +395,40 @@ def process_recorded_frames():
 # ───────────────────── HELPERS DE GRÁFICOS ─────────────────────
 def chart_opts(series):
     """Genera la configuración para un gráfico de ECharts."""
-    return {"tooltip": {"trigger": "axis"}, "xAxis": {"type": "category", "data": [f"F{i}" for i in range(len(series[0]['data']))]}, "yAxis": {"type": "value"}, "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True}, "series": series, "color": ["#2E7D32", "#81C784", "#1B5E20", "#A5D6A7", "#4CAF50", "#66BB6A"], "legend": {"data": [s['name'] for s in series]}}
+    return {
+        "tooltip": {"trigger": "axis"},
+        "xAxis": {
+            "type": "category", 
+            "data": [f"F{i}" for i in range(len(series[0]['data']))],
+            "axisLine": {"lineStyle": {"color": "#bdc3c7"}},
+            "axisLabel": {"color": "#7f8c8d"}
+        },
+        "yAxis": {
+            "type": "value",
+            "axisLine": {"lineStyle": {"color": "#bdc3c7"}},
+            "axisLabel": {"color": "#7f8c8d"}
+        },
+        "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
+        "series": series,
+        "color": ["#3498db", "#2ecc71", "#9b59b6", "#e74c3c", "#f1c40f", "#1abc9c"],
+        "legend": {
+            "data": [s['name'] for s in series],
+            "textStyle": {"color": "#7f8c8d"}
+        }
+    }
 
 # ───────────────────── APLICACIÓN PRINCIPAL ─────────────────────
 init_session_state()
 load_css()
 
-st.markdown("<h1 style='text-align:center'>DepthLayers</h1><p style='text-align:center'>Análisis de Profundidad 3D y Volumetría</p>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align:center; margin-bottom:0.25rem;'>DepthLayers</h1><p style='text-align:center; color:#7f8c8d; margin-bottom:2rem;'>Análisis de Profundidad 3D y Volumetría</p>", unsafe_allow_html=True)
 
 # --- PANTALLA INICIAL: SELECCIÓN DE MÉTODO ---
 if not st.session_state.video_processed:
     cols = st.columns([1, 1.5, 1])
     with cols[1]:
         with card("Iniciar Análisis"):
-            tab_up, tab_live = st.tabs(["⬆️ Subir Vídeo", "⏺️ Grabación en Directo"])
+            tab_up, tab_live = st.tabs(["Subir Vídeo", "Grabación en Directo"])
             with tab_up:
                 up = st.file_uploader("Selecciona un archivo de vídeo", type=SUPPORTED_FORMATS, label_visibility="collapsed")
                 if up and st.button("Procesar Vídeo", use_container_width=True, type="primary"):
@@ -353,64 +436,76 @@ if not st.session_state.video_processed:
             with tab_live:
                 live_placeholder = st.empty()
                 if st.session_state.previewing:
-                    st.markdown("<div class='recording-status preview-active'>PREVISUALIZANDO</div>", unsafe_allow_html=True)
+                    st.markdown("<div class='status-indicator preview-active'>PREVISUALIZACIÓN ACTIVA</div>", unsafe_allow_html=True)
                     if st.session_state.live_frame is not None:
-                        live_placeholder.image(st.session_state.live_frame, use_container_width=True, caption="Encuadra la cámara")
-                    else: live_placeholder.info("⏳ Conectando con la cámara...")
+                        live_placeholder.image(st.session_state.live_frame, use_container_width=True, caption="Encuadre la cámara")
+                    else: live_placeholder.info("Conectando con la cámara...")
                     b1, b2 = st.columns(2)
-                    if b1.button("⏺️ Iniciar Grabación", use_container_width=True, type="primary"):
+                    if b1.button("Iniciar Grabación", use_container_width=True, type="primary"):
                         start_official_recording(); st.rerun()
-                    if b2.button("⏹️ Cancelar", use_container_width=True):
+                    if b2.button("Cancelar", use_container_width=True):
                         reset_app_state(); st.rerun()
                 elif st.session_state.recording:
-                    st.markdown(f"<div class='recording-status recording-active'>REC ● EN DIRECTO</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='status-indicator recording-active'>GRABACIÓN EN CURSO</div>", unsafe_allow_html=True)
                     if st.session_state.live_frame is not None:
                         caption = f"Frames grabados: {len(st.session_state.frame_urls)}"
                         live_placeholder.image(st.session_state.live_frame, caption=caption, use_container_width=True)
-                    else: live_placeholder.info("⏳ Grabando...")
-                    if st.button("⬛ Detener Grabación", use_container_width=True):
+                    else: live_placeholder.info("Iniciando grabación...")
+                    if st.button("Detener Grabación", use_container_width=True):
                         if stop_and_finalize_recording(): st.rerun()
                 else:
                     with live_placeholder.container():
-                        st.markdown("<div style='text-align: center; padding: 3rem 1rem; border: 2px dashed #A5D6A7; border-radius: 15px;'><h3>Cámara Inactiva</h3><p>Activa la previsualización para encuadrar la imagen antes de grabar.</p></div>", unsafe_allow_html=True)
-                    if st.button("👁️ Previsualizar Cámara", use_container_width=True):
+                        st.markdown("<div style='text-align: center; padding: 2rem 1rem; border: 1px dashed #e0e0e0; border-radius: 8px;'><h3 style='margin-top:0;'>Cámara Inactiva</h3><p style='color:#7f8c8d;'>Active la previsualización para configurar la imagen</p></div>", unsafe_allow_html=True)
+                    if st.button("Previsualizar Cámara", use_container_width=True):
                         if start_preview(): st.rerun()
 
-        st.markdown(f"<div style='background:#E8F5E9;padding:1rem;border-radius:10px;border-left:4px solid #2E7D32'><b>Requisitos del Sistema</b><br>GPU con CUDA • Vídeo ≤{MAX_VIDEO_DURATION}s • Archivo ≤{MAX_VIDEO_SIZE_MB} MB</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='background:#f1f8ff;padding:1rem;border-radius:8px;border-left:3px solid #3498db;'><b>Requisitos del Sistema</b><p style='margin-bottom:0;'>• GPU con CUDA • Vídeo ≤{MAX_VIDEO_DURATION}s • Archivo ≤{MAX_VIDEO_SIZE_MB} MB</p></div>", unsafe_allow_html=True)
 
 # --- PANTALLA DE RESULTADOS ---
 else:
     with st.container():
         h1, h2 = st.columns([1, 0.2])
-        h1.markdown(f"<h2>Resultados del Análisis</h2><p>{st.session_state.total_frames} frames procesados {'(Sesión ' + st.session_state.recording_session_id + ')' if st.session_state.recording_session_id else ''}</p>", unsafe_allow_html=True)
-        h2.button("🔄 Nuevo Análisis", on_click=reset_app_state, use_container_width=True)
+        h1.markdown(f"<h2>Resultados del Análisis</h2><p style='color:#7f8c8d;'>{st.session_state.total_frames} frames procesados {'(Sesión ' + st.session_state.recording_session_id + ')' if st.session_state.recording_session_id else ''}</p>", unsafe_allow_html=True)
+        h2.button("Nuevo Análisis", on_click=reset_app_state, use_container_width=True)
         
-        tab_view, tab_ana = st.tabs(["Visor", "Herramientas de Análisis"])
+        tab_view, tab_ana = st.tabs(["Visor", "Análisis"])
         
         with tab_view:
             if st.session_state.frame_urls and not st.session_state.original_frames:
                 with card("Procesamiento Requerido"):
-                    st.info(f"Tu sesión grabada contiene {st.session_state.total_frames} frames (capturados cada {FRAME_POLL_INTERVAL}s). Procesa los frames para poder visualizarlos y analizarlos.")
-                    if st.button("✨ Analizar Frames Grabados", use_container_width=True, type="primary"):
+                    st.info(f"La sesión grabada contiene {st.session_state.total_frames} frames (capturados cada {FRAME_POLL_INTERVAL}s).")
+                    if st.button("Analizar Frames Grabados", use_container_width=True, type="primary"):
                         process_recorded_frames(); st.rerun()
             elif st.session_state.original_frames:
                 with card("Visor de Secuencia"):
                     c1, c2, c3 = st.columns([0.15, 1, 0.2])
-                    c1.button("▶️ Play" if not st.session_state.playing else "⏸️ Pausa", on_click=lambda: st.session_state.update(playing=not st.session_state.playing), use_container_width=True)
+                    c1.button("Play" if not st.session_state.playing else "Pausa", on_click=lambda: st.session_state.update(playing=not st.session_state.playing), use_container_width=True)
                     val = c2.slider("Frame", 0, st.session_state.total_frames - 1 if st.session_state.total_frames > 0 else 0, st.session_state.current_frame_index, label_visibility="collapsed")
                     if val != st.session_state.current_frame_index: st.session_state.current_frame_index = val; st.session_state.playing = False
-                    c3.markdown(f"<p style='text-align:center; padding-top:10px;'>{val + 1} / {st.session_state.total_frames}</p>", unsafe_allow_html=True)
+                    c3.markdown(f"<p style='text-align:center; padding-top:10px; color:#7f8c8d;'>{val + 1} / {st.session_state.total_frames}</p>", unsafe_allow_html=True)
+                    
                     if st.session_state.total_frames > 0:
                         frame = st.session_state.original_frames[val]; depth = st.session_state.depth_maps_colored[val]
                         if st.session_state.video_orientation == "vertical":
-                            st.image(frame, caption="Frame Original", use_container_width=True); st.image(depth, caption="Mapa de Profundidad", use_container_width=True)
+                            st.image(frame, caption="Frame Original", use_container_width=True)
+                            st.image(depth, caption="Mapa de Profundidad", use_container_width=True)
                         else:
-                            l, r = st.columns(2); l.image(frame, caption="Frame Original", use_container_width=True); r.image(depth, caption="Mapa de Profundidad", use_container_width=True)
+                            l, r = st.columns(2)
+                            l.image(frame, caption="Frame Original", use_container_width=True)
+                            r.image(depth, caption="Mapa de Profundidad", use_container_width=True)
+                
                 with card("Métricas del Frame"):
                     if st.session_state.total_frames > 0:
-                        m = st.session_state.metrics_cache[val]; c = st.columns(4)
-                        c[0].metric("Mín. Profundidad", f"{m['min']:.4f}"); c[1].metric("Máx. Profundidad", f"{m['max']:.4f}"); c[2].metric("Media", f"{m['mean']:.4f}"); c[3].metric("Desv. Estándar", f"{m['std']:.4f}")
-            else: st.info("Sube un vídeo o realiza una grabación para empezar.")
+                        m = st.session_state.metrics_cache[val]
+                        cols = st.columns(4)
+                        for col, (title, value) in zip(cols, [("Mín. Profundidad", m['min']), 
+                                                          ("Máx. Profundidad", m['max']), 
+                                                          ("Media", m['mean']), 
+                                                          ("Desv. Estándar", m['std'])]):
+                            with col:
+                                st.markdown(f"<div class='metric-card'><div class='metric-title'>{title}</div><div class='metric-value'>{value:.4f}</div></div>", unsafe_allow_html=True)
+            else: 
+                st.info("Suba un vídeo o realice una grabación para empezar.")
             
         with tab_ana:
             if st.session_state.original_frames:
@@ -420,7 +515,7 @@ else:
                         st.markdown("**Análisis Volumétrico**")
                         st.session_state.noise_threshold = st.slider("Umbral de Ruido", 0., 0.1, st.session_state.noise_threshold, 0.001, format="%.3f", help="Valores de cambio de profundidad por debajo de este umbral se ignorarán.")
                         if st.button("Calcular Volumen", use_container_width=True):
-                            with st.spinner("Calculando…"):
+                            with st.spinner("Calculando..."):
                                 res = analyze_volume(st.session_state.depth_maps_raw, st.session_state.noise_threshold)
                                 if res: st.session_state.volume_analysis_results = pd.DataFrame(res)
                                 else: st.warning("No hay suficientes frames para un análisis de volumen.")
@@ -431,11 +526,11 @@ else:
                         b1.button("Analizar Puntos", use_container_width=True, disabled=not st.session_state.selected_points, on_click=lambda: st.session_state.update(point_analysis_results=analyze_points(st.session_state.depth_maps_raw, st.session_state.selected_points)))
                         b2.button("Limpiar Puntos", use_container_width=True, disabled=not st.session_state.selected_points, on_click=lambda: st.session_state.update(selected_points=[], point_analysis_results=None))
                 
-                st.markdown("---")
+                st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
                 st.markdown("**Seleccionar Puntos en Frame Actual**")
                 img = np.copy(st.session_state.original_frames[st.session_state.current_frame_index])
                 for i, p in enumerate(st.session_state.selected_points):
-                    cv2.circle(img, (p['x'], p['y']), 8, (255, 255, 255), -1); cv2.circle(img, (p['x'], p['y']), 6, (0, 165, 80), -1)
+                    cv2.circle(img, (p['x'], p['y']), 8, (255, 255, 255), -1); cv2.circle(img, (p['x'], p['y']), 6, (52, 152, 219), -1)
                     cv2.putText(img, str(i + 1), (p['x'] + 10, p['y'] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 coords = streamlit_image_coordinates(img, key="selector")
                 if coords and len(st.session_state.selected_points) < 6:
@@ -450,7 +545,7 @@ else:
                         series = [dict(name=i['label'], type="line", data=i['depth_values'], smooth=True) for i in st.session_state.point_analysis_results]
                         st_echarts(options=chart_opts(series), height="300px")
             else:
-                st.info("Procesa los datos en la pestaña 'Visor' para activar las herramientas de análisis.")
+                st.info("Procese los datos en la pestaña 'Visor' para activar las herramientas de análisis.")
 
 # ───────────────────── BUCLE DE AUTO-REFRESH ─────────────────────
 if st.session_state.get("previewing") or st.session_state.get("recording"):
