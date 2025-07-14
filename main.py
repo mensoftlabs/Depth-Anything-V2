@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
@@ -64,6 +66,10 @@ async def add_cache_headers(request: Request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
+
+@app.get("/healthz")
+async def health_check():
+    return {"status": "ok"}
 
 # Endpoints
 @app.post("/upload")
