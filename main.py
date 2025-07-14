@@ -100,7 +100,7 @@ async def upload_raw_frame(request: Request):
 
 # Endpoints
 @app.post("/upload/2")
-async def upload_raw_frame(request: Request):
+async def upload_raw_frame_2(request: Request):
     try:
         img_bytes = await request.body()
 
@@ -127,7 +127,7 @@ async def upload_raw_frame(request: Request):
     
 # Endpoints
 @app.post("/upload/3")
-async def upload_raw_frame(request: Request):
+async def upload_raw_frame_3(request: Request):
     try:
         img_bytes = await request.body()
 
@@ -154,7 +154,7 @@ async def upload_raw_frame(request: Request):
     
 # Endpoints
 @app.post("/upload/4")
-async def upload_raw_frame(request: Request):
+async def upload_raw_frame_4(request: Request):
     try:
         img_bytes = await request.body()
 
