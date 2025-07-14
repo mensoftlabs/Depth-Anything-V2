@@ -29,7 +29,7 @@ st.set_page_config(page_title="DepthLayers", layout="wide",
 MAX_VIDEO_DURATION = 30         # s
 MAX_VIDEO_SIZE_MB = 50
 SUPPORTED_FORMATS = ["mp4", "mov", "avi"]
-RECORDING_SERVER = "http://192.168.1.42:8000"
+RECORDING_SERVER = "http://192.168.1.98:3037"
 # Intervalo de sondeo para previsualización y para capturar un frame durante la grabación
 FRAME_POLL_INTERVAL = 2         # s
 
