@@ -98,6 +98,87 @@ async def upload_raw_frame(request: Request):
     except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
+# Endpoints
+@app.post("/upload/2")
+async def upload_raw_frame(request: Request):
+    try:
+        img_bytes = await request.body()
+
+        if not RECORDING_STATE["recording"]:
+            return JSONResponse(content={"message": "Not recording. Frame ignored."}, status_code=200)
+
+        session_id = RECORDING_STATE["session_id"]
+        frame_idx = RECORDING_STATE["frame_count"]
+        session_dir = DATA_DIR / session_id / "recorded_frames_2"
+        os.makedirs(session_dir, exist_ok=True)
+
+        frame_path = session_dir / f"frame_{frame_idx:05d}.jpg"
+        
+        # Convert and save as JPEG
+        img = Image.open(BytesIO(img_bytes))
+        img = img.convert('RGB')
+        img.save(frame_path, 'JPEG', quality=95)
+        
+        RECORDING_STATE["frame_count"] += 1
+        return JSONResponse(content={"message": f"Frame {frame_idx} saved."}, status_code=200)
+
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    
+# Endpoints
+@app.post("/upload/3")
+async def upload_raw_frame(request: Request):
+    try:
+        img_bytes = await request.body()
+
+        if not RECORDING_STATE["recording"]:
+            return JSONResponse(content={"message": "Not recording. Frame ignored."}, status_code=200)
+
+        session_id = RECORDING_STATE["session_id"]
+        frame_idx = RECORDING_STATE["frame_count"]
+        session_dir = DATA_DIR / session_id / "recorded_frames_3"
+        os.makedirs(session_dir, exist_ok=True)
+
+        frame_path = session_dir / f"frame_{frame_idx:05d}.jpg"
+        
+        # Convert and save as JPEG
+        img = Image.open(BytesIO(img_bytes))
+        img = img.convert('RGB')
+        img.save(frame_path, 'JPEG', quality=95)
+        
+        RECORDING_STATE["frame_count"] += 1
+        return JSONResponse(content={"message": f"Frame {frame_idx} saved."}, status_code=200)
+
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+    
+# Endpoints
+@app.post("/upload/4")
+async def upload_raw_frame(request: Request):
+    try:
+        img_bytes = await request.body()
+
+        if not RECORDING_STATE["recording"]:
+            return JSONResponse(content={"message": "Not recording. Frame ignored."}, status_code=200)
+
+        session_id = RECORDING_STATE["session_id"]
+        frame_idx = RECORDING_STATE["frame_count"]
+        session_dir = DATA_DIR / session_id / "recorded_frames_4"
+        os.makedirs(session_dir, exist_ok=True)
+
+        frame_path = session_dir / f"frame_{frame_idx:05d}.jpg"
+        
+        # Convert and save as JPEG
+        img = Image.open(BytesIO(img_bytes))
+        img = img.convert('RGB')
+        img.save(frame_path, 'JPEG', quality=95)
+        
+        RECORDING_STATE["frame_count"] += 1
+        return JSONResponse(content={"message": f"Frame {frame_idx} saved."}, status_code=200)
+
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
 @app.post("/start-recording")
 async def start_recording(session_id: str = Form(...)):
     RECORDING_STATE.update(recording=True, frame_count=0, session_id=session_id)
