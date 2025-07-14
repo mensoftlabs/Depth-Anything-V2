@@ -94,22 +94,19 @@ async def upload_raw_frame(request: Request):
 
 @app.post("/start-recording")
 async def start_recording(session_id: str = Form(...)):
-    RECORDING_STATE["recording"] = True
-    RECORDING_STATE["frame_count"] = 0
-    RECORDING_STATE["session_id"] = session_id
+    RECORDING_STATE.update(recording=True, frame_count=0, session_id=session_id)
 
     session_dir = DATA_DIR / session_id / "recorded_frames"
     os.makedirs(session_dir, exist_ok=True)
-    
-    # Clear existing frames
     for f in session_dir.glob("frame_*.jpg"):
-        try:
-            os.remove(f)
-        except:
-            pass
+        f.unlink(missing_ok=True)
 
-    return {"message": f"Recording started for session {session_id}"}
-
+    # 👉 devuelve session_id
+    return {
+        "status": "success",
+        "message": f"Recording started for session {session_id}",
+        "session_id": session_id          #  ← ESTA LÍNEA ES IMPRESCINDIBLE
+    }
 @app.post("/stop-recording/{session_id}")
 async def stop_recording(session_id: str):
     try:
