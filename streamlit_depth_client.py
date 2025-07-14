@@ -154,8 +154,10 @@ def load_css():
         </style>
         """, unsafe_allow_html=True)
 
+from typing import Optional
+
 @contextmanager
-def card(title: str | None = None):
+def card(title: Optional[str] = None):
     html = "<div class='card'>"
     if title:
         html += f"<div class='card-title'>{title}</div>"
