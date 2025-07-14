@@ -212,29 +212,52 @@ def reset_app_state():
 # ───────────────────── MODELO DE IA ─────────────────────
 @st.cache_resource(show_spinner="Cargando modelo de IA…")
 def load_model(encoder="vitl"):
-    """Carga el modelo DepthAnythingV2, usando GPU si está disponible o CPU como alternativa."""
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        st.info("GPU con CUDA detectada. Usando GPU para el procesamiento.")
-    else:
+    """
+    Carga el modelo DepthAnythingV2 con manejo seguro de GPU y CPU.
+    Usa GPU si está disponible, y cae en CPU en caso contrario o si ocurre un error.
+    """
+    # Detectar dispositivo seguro
+    try:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if device.type == "cuda":
+            st.info("✅ GPU con CUDA detectada. Usando GPU para el procesamiento.")
+        else:
+            st.warning("⚠️ No se detectó una GPU con CUDA. Se usará la CPU (más lento).")
+    except Exception:
         device = torch.device("cpu")
-        st.warning("No se detectó una GPU con CUDA. El modelo se ejecutará en la CPU, lo que será considerablemente más lento.")
-    
-    if not os.path.exists("checkpoints"):
-        st.error("Directorio 'checkpoints' no encontrado. Por favor, descarga los modelos y colócalos en esa carpeta.")
+        st.warning("⚠️ Error al verificar CUDA. Se usará CPU como alternativa segura.")
+
+    # Verificar existencia de carpeta y checkpoint
+    ckpt_dir = "checkpoints"
+    ckpt_file = f"{ckpt_dir}/depth_anything_v2_{encoder}.pth"
+
+    if not os.path.exists(ckpt_dir):
+        st.error(f"❌ Carpeta '{ckpt_dir}' no encontrada. Por favor, créala y coloca allí el modelo.")
         st.stop()
-        
-    ckpt = f"checkpoints/depth_anything_v2_{encoder}.pth"
-    if not os.path.exists(ckpt):
-        st.error(f"Modelo no encontrado: {ckpt}. Asegúrate de que el archivo del modelo está en el directorio 'checkpoints'.")
+
+    if not os.path.exists(ckpt_file):
+        st.error(f"❌ Archivo del modelo no encontrado: {ckpt_file}")
+        st.markdown("Puedes descargar el modelo desde el repositorio oficial:")
+        st.code("https://github.com/LiheYoung/Depth-Anything-V2")
         st.stop()
-        
-    cfg = {"encoder": encoder, "features": 256, "out_channels": [256, 512, 1024, 1024]}
-    net = DepthAnythingV2(**cfg)
-    # Cargar el modelo en el dispositivo seleccionado (CPU o GPU)
-    net.load_state_dict(torch.load(ckpt, map_location=device))
-    net.to(device).eval()
-    return net, device
+
+    # Cargar modelo
+    try:
+        cfg = {
+            "encoder": encoder,
+            "features": 256,
+            "out_channels": [256, 512, 1024, 1024]
+        }
+        net = DepthAnythingV2(**cfg)
+        net.load_state_dict(torch.load(ckpt_file, map_location=device))
+        net.to(device).eval()
+        return net, device
+
+    except Exception as e:
+        st.error(f"❌ Error al cargar el modelo: {e}")
+        st.stop()
+
+
 
 # ───────────────────── LÓGICA DE ANÁLISIS ─────────────────────
 def predict_depth(model, device, img_rgb):
