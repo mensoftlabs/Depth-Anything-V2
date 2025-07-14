@@ -127,25 +127,25 @@ def load_css():
             }
             
             .metric-card {
-                background: #f8f9fa;
-                border-radius: 6px;
+                background-color: #fff;
+                border: 1px solid #e6e6e6;
+                border-radius: 8px;
                 padding: 1rem;
                 text-align: center;
-                border-left: 3px solid var(--secondary);
+                margin-bottom: 1rem;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.05);
             }
-            
             .metric-title {
-                font-size: 0.9rem;
-                color: #7f8c8d;
-                margin-bottom: 0.25rem;
+                font-size: 0.85rem;
+                color: #888;
+                margin-bottom: 0.4rem;
+                font-weight: 500;
             }
-            
             .metric-value {
-                font-size: 1.25rem;
+                font-size: 1.5rem;
                 font-weight: 600;
-                color: var(--primary);
+                color: #2c3e50;
             }
-            
             .divider {
                 height: 1px;
                 background: #e0e0e0;
@@ -507,45 +507,135 @@ else:
             else: 
                 st.info("Suba un vídeo o realice una grabación para empezar.")
             
-        with tab_ana:
-            if st.session_state.original_frames:
-                with card("Herramientas de Análisis"):
-                    a1, a2 = st.columns(2)
-                    with a1:
-                        st.markdown("**Análisis Volumétrico**")
-                        st.session_state.noise_threshold = st.slider("Umbral de Ruido", 0., 0.1, st.session_state.noise_threshold, 0.001, format="%.3f", help="Valores de cambio de profundidad por debajo de este umbral se ignorarán.")
-                        if st.button("Calcular Volumen", use_container_width=True):
-                            with st.spinner("Calculando..."):
-                                res = analyze_volume(st.session_state.depth_maps_raw, st.session_state.noise_threshold)
-                                if res: st.session_state.volume_analysis_results = pd.DataFrame(res)
-                                else: st.warning("No hay suficientes frames para un análisis de volumen.")
-                    with a2:
-                        st.markdown("**Análisis de Puntos**")
-                        st.info(f"{len(st.session_state.selected_points)} puntos seleccionados (Máx. 6)")
-                        b1, b2 = st.columns(2)
-                        b1.button("Analizar Puntos", use_container_width=True, disabled=not st.session_state.selected_points, on_click=lambda: st.session_state.update(point_analysis_results=analyze_points(st.session_state.depth_maps_raw, st.session_state.selected_points)))
-                        b2.button("Limpiar Puntos", use_container_width=True, disabled=not st.session_state.selected_points, on_click=lambda: st.session_state.update(selected_points=[], point_analysis_results=None))
-                
-                st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
-                st.markdown("**Seleccionar Puntos en Frame Actual**")
+    with tab_ana:
+        if st.session_state.original_frames:
+
+            # Herramientas de Análisis
+            with card("Herramientas de Análisis"):
+                depth_map = st.session_state.depth_maps_raw[st.session_state.current_frame_index]
+                point_depths = []
+                for i, p in enumerate(st.session_state.selected_points):
+                    x, y = int(p['x']), int(p['y'])
+                    if 0 <= x < depth_map.shape[1] and 0 <= y < depth_map.shape[0]:
+                        depth_val = float(depth_map[y, x])
+                        point_depths.append({
+                            "Punto": f"P{i+1} ({x}, {y})",
+                            "Profundidad": round(depth_val, 4)
+                        })
+
+                # Controles de análisis
+                a1, a2 = st.columns(2)
+                with a1:
+                    st.markdown("**Análisis Volumétrico**")
+                    st.session_state.noise_threshold = st.slider(
+                        "Umbral de Ruido",
+                        min_value=0.0, max_value=0.1,
+                        value=st.session_state.noise_threshold,
+                        step=0.001, format="%.3f",
+                        help="Valores de cambio de profundidad por debajo de este umbral se ignorarán."
+                    )
+                    if st.button("Calcular Variacion de Volumen", use_container_width=True):
+                        with st.spinner("Calculando..."):
+                            res = analyze_volume(
+                                st.session_state.depth_maps_raw,
+                                st.session_state.noise_threshold
+                            )
+                            if res:
+                                st.session_state.volume_analysis_results = pd.DataFrame(res)
+                            else:
+                                st.warning("No hay suficientes frames para un análisis de volumen.")
+
+                with a2:
+                    st.markdown("**Análisis de Puntos**")
+                    st.info(f"{len(st.session_state.selected_points)} puntos seleccionados (Máx. 6)")
+
+                    # Espacio vertical para alinear con el slider
+                    st.markdown("<div style='height: 26px;'></div>", unsafe_allow_html=True)
+
+                    # Botones alineados a la misma altura
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        st.button(
+                            "Analizar Puntos",
+                            use_container_width=True,
+                            disabled=not st.session_state.selected_points,
+                            on_click=lambda: st.session_state.update(
+                                point_analysis_results=analyze_points(
+                                    st.session_state.depth_maps_raw,
+                                    st.session_state.selected_points
+                                )
+                            )
+                        )
+                    with b2:
+                        st.button(
+                            "Limpiar Puntos",
+                            use_container_width=True,
+                            disabled=not st.session_state.selected_points,
+                            on_click=lambda: st.session_state.update(
+                                selected_points=[],
+                                point_analysis_results=None
+                            )
+                        )
+
+            # Selección de puntos y KPIs
+            st.markdown("<div class='divider'></div>", unsafe_allow_html=True)
+            st.markdown("**Seleccionar Puntos en Frame Actual**")
+
+            col_img, col_kpis = st.columns([2, 1])
+
+            with col_img:
                 img = np.copy(st.session_state.original_frames[st.session_state.current_frame_index])
                 for i, p in enumerate(st.session_state.selected_points):
-                    cv2.circle(img, (p['x'], p['y']), 8, (255, 255, 255), -1); cv2.circle(img, (p['x'], p['y']), 6, (52, 152, 219), -1)
-                    cv2.putText(img, str(i + 1), (p['x'] + 10, p['y'] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.circle(img, (p['x'], p['y']), 8, (255, 255, 255), -1)
+                    cv2.circle(img, (p['x'], p['y']), 6, (52, 152, 219), -1)
+                    cv2.putText(img, str(i + 1), (p['x'] + 10, p['y'] + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
                 coords = streamlit_image_coordinates(img, key="selector")
                 if coords and len(st.session_state.selected_points) < 6:
-                    if coords not in st.session_state.selected_points: st.session_state.selected_points.append(coords); st.rerun()
-                
-                if st.session_state.volume_analysis_results is not None:
-                    with card("Resultados Volumétricos (vs Frame 0)"):
-                        st_echarts(options=chart_opts([dict(name="Cambio Neto", type="line", smooth=True, data=st.session_state.volume_analysis_results.Volume_Change.tolist())]), height="300px")
-                        st.dataframe(st.session_state.volume_analysis_results, use_container_width=True)
-                if st.session_state.point_analysis_results is not None:
-                    with card("Evolución de Profundidad por Punto"):
-                        series = [dict(name=i['label'], type="line", data=i['depth_values'], smooth=True) for i in st.session_state.point_analysis_results]
-                        st_echarts(options=chart_opts(series), height="300px")
-            else:
-                st.info("Procese los datos en la pestaña 'Visor' para activar las herramientas de análisis.")
+                    if coords not in st.session_state.selected_points:
+                        st.session_state.selected_points.append(coords)
+                        st.rerun()
+            if st.session_state.selected_points:
+                with col_kpis:
+                    st.markdown("<div class='card-title'>Profundidad por Punto</div>", unsafe_allow_html=True)
+                    kpi_cols = st.columns(2)
+                    for i, p in enumerate(st.session_state.selected_points):
+                        x, y = int(p['x']), int(p['y'])
+                        if 0 <= x < depth_map.shape[1] and 0 <= y < depth_map.shape[0]:
+                            depth_val = float(depth_map[y, x])
+                            with kpi_cols[i % 2]:
+                                st.markdown(f"""
+                                <div class='metric-card'>
+                                    <div class='metric-title'>P{i+1} ({x}, {y})</div>
+                                    <div class='metric-value'>{depth_val:.2f}</div>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+            # Análisis volumétrico
+            if st.session_state.volume_analysis_results is not None:
+                with card("Resultados Volumétricos (vs Frame 0)"):
+                    st_echarts(
+                        options=chart_opts([{
+                            "name": "Cambio Neto",
+                            "type": "line",
+                            "smooth": True,
+                            "data": st.session_state.volume_analysis_results.Volume_Change.tolist()
+                        }]),
+                        height="300px"
+                    )
+                    st.dataframe(st.session_state.volume_analysis_results, use_container_width=True)
+
+            # Análisis de evolución por punto
+            if st.session_state.point_analysis_results is not None:
+                with card("Evolución de Profundidad por Punto"):
+                    series = [dict(name=i['label'], type="line", data=i['depth_values'], smooth=True)
+                            for i in st.session_state.point_analysis_results]
+                    st_echarts(options=chart_opts(series), height="300px")
+
+        else:
+            st.info("Procese los datos en la pestaña 'Visor' para activar las herramientas de análisis.")
+
 
 # ───────────────────── BUCLE DE AUTO-REFRESH ─────────────────────
 if st.session_state.get("previewing") or st.session_state.get("recording"):
