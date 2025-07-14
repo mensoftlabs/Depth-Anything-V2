@@ -198,25 +198,30 @@ async def get_frames_info(session_id: str):
 
 def load_model(encoder="vitl"):
     global model, device
-    
+
+    # Verificar si hay GPU, usar CPU como fallback seguro
     if torch.cuda.is_available():
         device = "cuda"
+        print("✅ GPU con CUDA detectada. Usando GPU para el procesamiento.")
     else:
-        raise RuntimeError("GPU is required for this application, but CUDA is not available.")
-    
+        device = "cpu"
+        print("⚠️ No se detectó GPU. Usando CPU (procesamiento más lento).")
+
     print(f"Using device: {device}")
-    
+
+    # Configuración del modelo
     cfg = {"encoder": encoder, "features": 256, "out_channels": [256, 512, 1024, 1024]}
     model = DepthAnythingV2(**cfg)
-    
+
     checkpoint_path = f"checkpoints/depth_anything_v2_{encoder}.pth"
     if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Model checkpoint not found at {checkpoint_path}")
-    
+        raise FileNotFoundError(f"❌ Model checkpoint not found at {checkpoint_path}")
+
     print(f"Loading weights from {checkpoint_path}")
     model.load_state_dict(torch.load(checkpoint_path, map_location=device))
     model.to(device).eval()
-    print("Model loaded successfully")
+    print("✅ Modelo cargado correctamente.")
+
 
 @app.on_event("startup")
 async def startup_event():
