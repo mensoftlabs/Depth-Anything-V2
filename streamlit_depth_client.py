@@ -351,7 +351,14 @@ def start_preview():
         resp = requests.post(f"{RECORDING_SERVER}/start-recording", data={"session_id": sid_local}, timeout=3)
         if resp.status_code == 200:
             sid = resp.json().get("session_id", sid_local)
-            st.session_state.update(previewing=True, recording_session_id=sid, recorded_frames=0, live_frame=None, frame_urls=[])
+            st.session_state.update(
+                previewing=True,
+                recording_session_id=sid,
+                recorded_frames=0,
+                live_frame=None,
+                frame_urls=[],
+                camera_subdir=st.session_state.get("camera_subdir", "recorded_frames")
+            )
             return True
         st.error(f"Error del servidor al iniciar previsualización: {resp.text}")
     except Exception as e:
@@ -470,11 +477,11 @@ if not st.session_state.video_processed:
                     "Cámara 3": ("recorded_frames_3", "/upload/3"),
                     "Cámara 4": ("recorded_frames_4", "/upload/4"),
                 }
-
                 camera_label = st.selectbox("Selecciona la cámara", list(CAMERAS.keys()), index=0)
                 camera_subdir, camera_endpoint = CAMERAS[camera_label]
-                st.session_state["camera_subdir"] = camera_subdir
-                st.session_state["camera_endpoint"] = camera_endpoint
+                default_cam = list(CAMERAS.values())[0]
+                st.session_state.setdefault("camera_subdir", default_cam[0])
+                st.session_state.setdefault("camera_endpoint", default_cam[1])
                 live_placeholder = st.empty()
                 if st.session_state.previewing:
                     st.markdown("<div class='status-indicator preview-active'>PREVISUALIZACIÓN ACTIVA</div>", unsafe_allow_html=True)
