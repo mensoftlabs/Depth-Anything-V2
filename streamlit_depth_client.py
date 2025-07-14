@@ -156,7 +156,10 @@ def load_css():
 
 @contextmanager
 def card(title: str | None = None):
-    st.markdown(f"<div class='card'>{'<div class=\"card-title\">'+title+'</div>' if title else ''}", unsafe_allow_html=True)
+    html = "<div class='card'>"
+    if title:
+        html += f"<div class='card-title'>{title}</div>"
+    st.markdown(html, unsafe_allow_html=True)
     yield
     st.markdown("</div>", unsafe_allow_html=True)
 
