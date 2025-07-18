@@ -647,7 +647,7 @@ if st.session_state.get("previewing") or st.session_state.get("recording"):
     time.sleep(FRAME_POLL_INTERVAL)
     st.rerun()
 elif st.session_state.get("playing"):
-    time.sleep(0.1)
+    time.sleep(0.016)
     if st.session_state.total_frames > 0:
         st.session_state.current_frame_index = (st.session_state.current_frame_index + 1) % st.session_state.total_frames
     st.rerun()
